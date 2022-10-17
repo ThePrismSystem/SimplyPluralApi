@@ -2,6 +2,7 @@ import axios, { AxiosError, AxiosResponse } from "axios";
 import { logger } from "../../logger";
 import * as Sentry from "@sentry/node";
 import { nanoid } from "nanoid";
+import { getCollection } from "../../mongo";
 
 import promclient from "prom-client"
 
@@ -16,14 +17,28 @@ export interface PkRequest {
 	token: string,
 	data: any | undefined,
 	type: PkRequestType,
+	purpose: 'Member' | 'FrontSync',
 	response: AxiosResponse<any> | null,
 	id: string,
 }
 
-const pendingRequests: Array<PkRequest> = []
-let pendingResponses: Array<PkRequest> = []
+export interface QueuedRequest {
+	id: string,
+	request: PkRequest,
+	purpose: 'Member' | 'FrontSync',
+}
 
-let remainingRequestsThisSecond = 0;
+let pendingRequestIds: string[] = [];
+let pendingResponses: Array<PkRequest> = [];
+
+const memberRateLimit = parseInt(process.env.MEMBERPLURALKITRATELIMIT ?? '2');
+const frontSyncRateLimit = parseInt(process.env.FRONTSYNCPLURALKITRATELIMIT ?? '2');
+
+let memberRemainingRequestsThisSecond = 0;
+let frontSyncRemainingRequestsThisSecond = 0;
+
+const memberPluralKitAppHeader = process.env.MEMBERPLURALKITAPP ?? '';
+const frontSyncPluralKitAppHeader = process.env.FRONTSYNCPLURALKITAPP ?? '';
 
 export const addPendingRequest = (request: PkRequest): Promise<AxiosResponse<any> | null> => {
 	return new Promise(function (resolve) {
@@ -31,7 +46,8 @@ export const addPendingRequest = (request: PkRequest): Promise<AxiosResponse<any
 		request.id = nanoid()
 
 		// Add as pending request
-		pendingRequests.push(request);
+		const queuedRequests = getCollection(`pk${request.purpose}QueuedRequests`);
+		queuedRequests.insertOne({ id: request.id, request: request, purpose: request.purpose });
 
 		// Wait until request was answered
 		(function waitForAnswer() {
@@ -54,13 +70,20 @@ export const startPkController = () => {
 }
 
 export const resetRequestCounter = () => {
-	remainingRequestsThisSecond = 20;
-	setTimeout(resetRequestCounter, 1000)
+	memberRemainingRequestsThisSecond = memberRateLimit;
+	frontSyncRemainingRequestsThisSecond = frontSyncRateLimit;
+
+	setTimeout(resetRequestCounter, 1000);
 }
 
-export const reportActiveQueueSize = () => {
-	console.log("Active pk controller queue size: " + pendingRequests.length.toString())
-	setTimeout(reportActiveQueueSize, 10000)
+export const reportActiveQueueSize = async () => {
+	const memberQueueSize = await getMemberQueueSize();
+	const frontSyncQueueSize = await getFrontSyncQueueSize();
+
+	console.log(`Active pk controller (Member) queue size: ${memberQueueSize.toString()}`);
+	console.log(`Active pk controller (FrontSync) queue size: ${frontSyncQueueSize.toString()}`);
+
+	setTimeout(reportActiveQueueSize, 10000);
 }
 
 const handleError = (reason: AxiosError) => {
@@ -70,29 +93,71 @@ const handleError = (reason: AxiosError) => {
 	return null;
 }
 
+export const getMemberQueueSize = () => getCollection(`pkMemberQueuedRequests`).countDocuments();
+
+export const getFrontSyncQueueSize = () => getCollection(`pkFrontSyncQueuedRequests`).countDocuments();
+
 export const tick = async () => {
+	// Dispatch member requests
 	try {
-		if (remainingRequestsThisSecond > 0) {
-			for (let i = 0; (i < remainingRequestsThisSecond && i < 2) && i < pendingRequests.length; ++i) {
-				dispatchTickRequests(pendingRequests[i]);
-				pendingRequests.splice(i, 1)
-				remainingRequestsThisSecond--;
-			}
+		const queuedMemberRequests = getCollection(`pkMemberQueuedRequests`);
+
+		if (memberRemainingRequestsThisSecond > 0) {
+			// Limit queued requests we're grabbing to ones not currently in the pendingRequestIds array - and - limit to the rate limit value for member requests
+			const queuedRequestsToDispatch: QueuedRequest[] = await queuedMemberRequests.find({ id: { "$nin": pendingRequestIds }}, { limit: memberRateLimit }).toArray();
+
+			queuedRequestsToDispatch.forEach((queuedRequest) => {
+				dispatchTickRequests(queuedRequest.request);
+				// If we keep track of pending request IDs in-memory, we don't need to keep track of or filter based on a "started" property
+				pendingRequestIds.push(queuedRequest.id);
+				memberRemainingRequestsThisSecond--;
+			});
 		}
 	}
 	catch (e) {
 		console.log(e);
-		logger.error("Pk sync error: " + e)
+		logger.error("Pk member sync error: " + e)
+		Sentry.captureException(e);
+	}
+
+	// Dispatch front sync requests
+	try {
+		const queuedFrontSyncRequests = getCollection(`pkFrontSyncQueuedRequests`);
+
+		if (frontSyncRemainingRequestsThisSecond > 0) {
+			// Limit queued requests we're grabbing to ones not currently in the pendingRequestIds array - and - limit to the rate limit value for front sync requests
+			const queuedRequestsToDispatch: QueuedRequest[] = await queuedFrontSyncRequests.find({ id: { "$nin": pendingRequestIds }}, { limit: frontSyncRateLimit }).toArray();
+
+			queuedRequestsToDispatch.forEach((queuedRequest) => {
+				dispatchTickRequests(queuedRequest.request);
+				// If we keep track of pending request IDs in-memory, we don't need to keep track of or filter based on a "request started" property
+				pendingRequestIds.push(queuedRequest.id);
+				frontSyncRemainingRequestsThisSecond--;
+			});
+		}
+	}
+	catch (e) {
+		console.log(e);
+		logger.error("Pk frontSync sync error: " + e)
 		Sentry.captureException(e);
 	}
 
 	setTimeout(tick, 100)
 }
 
+export const removeQueuedRequest = async (request: PkRequest) => {
+	// Remove request ID from the pending request IDs
+	pendingRequestIds = pendingRequestIds.filter(requestId => requestId != requestId);
+	
+	// Remove the queued request document from mongo
+	const queuedRequests = getCollection(`pk${request.purpose}QueuedRequests`);
+	await queuedRequests.deleteOne({ id: request.id });
+}
+
 const counter  = new promclient.Counter({
 	name: 'apparyllis_api_pk_syncs',
 	help: 'Counter for pk syncs performed',
- 	labelNames: ['method', 'statusCode'],
+	labelNames: ['method', 'statusCode'],
 });
 	
 export const dispatchTickRequests = async (request: PkRequest) => {
@@ -109,7 +174,7 @@ export const dispatchTickRequests = async (request: PkRequest) => {
 			{
 				console.log("GET=>"+ request.path)
 			}
-			const result = await axios.get(request.path, { headers: { authorization: request.token, "X-PluralKit-App": process.env.PLURALKITAPP ?? "" } }).catch(handleError)
+			const result = await axios.get(request.path, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError)
 			counter.labels("GET", result?.status.toString() ?? "503").inc(1)
 			if (debug)
 			{
@@ -124,7 +189,7 @@ export const dispatchTickRequests = async (request: PkRequest) => {
 			{
 				console.log("POST=>"+ request.path)
 			}
-			const result = await axios.post(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": process.env.PLURALKITAPP ?? "" } }).catch(handleError)
+			const result = await axios.post(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError)
 			counter.labels("POST", result?.status.toString() ?? "503").inc(1)
 			if (debug)
 			{
@@ -139,7 +204,7 @@ export const dispatchTickRequests = async (request: PkRequest) => {
 			{
 				console.log("PATCH=>"+ request.path)
 			}
-			const result = await axios.patch(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": process.env.PLURALKITAPP ?? "" } }).catch(handleError)
+			const result = await axios.patch(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError)
 			counter.labels("PATCH", result?.status.toString() ?? "503").inc(1)
 			if (debug)
 			{
@@ -150,4 +215,7 @@ export const dispatchTickRequests = async (request: PkRequest) => {
 			break
 		}
 	}
+	
+	// Remove the completed request both from the pendingRequestIds array and mongo
+	await removeQueuedRequest(request);
 }

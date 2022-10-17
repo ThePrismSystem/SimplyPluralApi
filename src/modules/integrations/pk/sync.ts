@@ -108,12 +108,12 @@ export const syncMemberToPk = async (options: syncOptions, spMemberId: string, t
 		if (!validUrl.isUri(memberDataToSync.avatar_url)) {
 			delete memberDataToSync["avatar_url"]
 		}
-    }
+	}
 
 	if (spMemberResult) {
 		const pkId: string | undefined | null = spMemberResult.pkId;
 		if (pkId && pkId.length === 5) {
-			const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${spMemberResult.pkId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "" }
+			const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${spMemberResult.pkId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
 			const pkMemberResult = memberData ?? await addPendingRequest(getRequest)
 
 			let status = memberData ? 200 : pkMemberResult?.status;
@@ -126,7 +126,7 @@ export const syncMemberToPk = async (options: syncOptions, spMemberId: string, t
 				}
 
 				if (status == 200) {
-					const patchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${spMemberResult.pkId}`, token, response: null, data: memberDataToSync, type: PkRequestType.Patch, id: "" }
+					const patchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${spMemberResult.pkId}`, token, response: null, data: memberDataToSync, type: PkRequestType.Patch, id: "", purpose: 'Member' }
 					const patchResult = await addPendingRequest(patchRequest)
 					if (patchResult) {
 						if (patchResult.status === 200) {
@@ -139,7 +139,7 @@ export const syncMemberToPk = async (options: syncOptions, spMemberId: string, t
 				}
 				else if (status === 404 || status === 403) {
 					memberDataToSync.name = name;
-					const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members`, token, response: null, data: memberDataToSync, type: PkRequestType.Post, id: "" }
+					const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members`, token, response: null, data: memberDataToSync, type: PkRequestType.Post, id: "", purpose: 'Member' }
 					const postResult = await addPendingRequest(postRequest)
 					if (postResult) {
 						if (postResult.status === 200) {
@@ -160,7 +160,7 @@ export const syncMemberToPk = async (options: syncOptions, spMemberId: string, t
 		}
 		else {
 			memberDataToSync.name = name;
-			const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members`, token, response: null, data: memberDataToSync, type: PkRequestType.Post, id: "" }
+			const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members`, token, response: null, data: memberDataToSync, type: PkRequestType.Post, id: "", purpose: 'Member' }
 			const postResult = await addPendingRequest(postRequest)
 
 			if (postResult) {
@@ -183,7 +183,7 @@ export const syncMemberFromPk = async (options: syncOptions, pkMemberId: string,
 	let data: any | undefined = memberData;
 
 	if (!memberData) {
-		const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${pkMemberId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "" }
+		const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${pkMemberId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
 		const pkMemberResult = await addPendingRequest(getRequest)
 		if (pkMemberResult) {
 			if (pkMemberResult.status === 200) {
@@ -259,7 +259,7 @@ export const syncAllSpMembersToPk = async (options: syncOptions, _allSyncOptions
 
 	dispatchCustomEvent({uid: userId, type: "syncToUpdate", data: "Starting Sync"})
 
-	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "" }
+	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
 	const systemResult = await addPendingRequest(getSystemRequest)
 
 	if (systemResult?.status !== 200)
@@ -267,7 +267,7 @@ export const syncAllSpMembersToPk = async (options: syncOptions, _allSyncOptions
 		return handlePkResponse(systemResult!);
 	}
 
-	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "" }
+	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
 	const pkMembersResult = await addPendingRequest(getRequest)
 
 	const foundMembers: any[] = pkMembersResult?.data ?? []
@@ -304,7 +304,7 @@ export const syncAllSpMembersToPk = async (options: syncOptions, _allSyncOptions
 export const syncAllPkMembersToSp = async (options: syncOptions, allSyncOptions: syncAllOptions, token: string, userId: string): Promise<{ success: boolean, msg: string }> => {
 	dispatchCustomEvent({uid: userId, type: "syncFromUpdate", data: "Starting Sync"})
 
-	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "" }
+	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
 	const pkMembersResult = await addPendingRequest(getRequest)
 
 	let lastUpdate = 0
