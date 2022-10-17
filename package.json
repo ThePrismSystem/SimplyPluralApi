@@ -3,7 +3,7 @@
 	"version": "1.2.1",
 	"main": "index.ts",
 	"scripts": {
-		"dev": "DEVELOPMENT=1 npm run start",
+		"dev": "cross-env DEVELOPMENT=1 npm run start",
 		"start": "node --inspect=5858 -r ts-node/register src/index.ts",
 		"start:watch": "ts-node-dev --respawn  --cache-directory ./tmp  -- src/index.ts dotenv/config --inspect",
 		"build": "tsc",
@@ -76,7 +76,8 @@
 		"nodemon": "^2.0.19",
 		"ts-node": "^10.8.1",
 		"ts-node-dev": "^2.0.0",
-		"typescript": "^4.5.5"
+		"typescript": "^4.5.5",
+		"cross-env":"^7.0.3"
 	},
 	"eslintConfig": {
 		"parser": "@typescript-eslint/parser",
