@@ -3,8 +3,9 @@ import { logger } from "../logger";
 import { getCollection, parseId } from "../mongo";
 import { notifyOfFrontChange } from "./automatedReminder";
 import { performEvent } from "./eventController";
+import { syncFrontersWithPk, syncOptions } from "../integrations/pk/sync";
 
-export const frontChange = async (uid: string, removed: boolean, memberId: string, notifyReminders: boolean) => {
+export const frontChange = async (uid: string, removed: boolean, memberId: string, notifyReminders: boolean, token?: string, syncOptions?: syncOptions) => {
 
 	if (notifyReminders === true)
 	{
@@ -30,6 +31,7 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 	const members = getCollection("members");
 	const frontStatuses = getCollection("frontStatuses");
 
+	const fronterIds: Array<string> = [];
 	const fronterNames: Array<string> = [];
 	const fronterNotificationNames: Array<string> = [];
 	const customFronterNames: Array<string> = [];
@@ -53,6 +55,7 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 		} else {
 			const doc = await members.findOne({ uid: uid, _id: parseId(fronter.member) });
 			if (doc !== null) {
+				fronterIds.push(doc._id);
 				if (doc.private !== undefined && doc.private !== null && doc.private === false) {
 					if (doc.preventsFrontNotifs !== true) {
 						fronterNotificationNames.push(doc.name);
@@ -71,6 +74,10 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 				logger.warn("cannot find " + fronter);
 			}
 		}
+	}
+
+	if (token !== undefined && syncOptions !== undefined) {
+		syncFrontersWithPk(uid, fronterIds, new Date().toISOString(), token, syncOptions);
 	}
 
 	customFronterNames.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));

@@ -145,7 +145,22 @@ export const validatefrontHistoryPostSchema = (body: any): { success: boolean, m
 			startTime: { type: "number" },
 			endTime: { type: "number" },
 			member: { type: "string" },
-			customStatus: { type: "string", maxLength: 50 }
+			customStatus: { type: "string", maxLength: 50 },
+			token: { type: "string" },
+			options: {
+				type: "object",
+				properties: {
+					name: { type: "boolean", },
+					avatar: { type: "boolean" },
+					pronouns: { type: "boolean" },
+					description: { type: "boolean" },
+					useDisplayName: { type: "boolean" },
+					color: { type: "boolean" },
+				},
+				nullable: false,
+				additionalProperties: false,
+				required: ["name", "avatar", "pronouns", "description", "useDisplayName", "color",]
+			}
 		},
 		nullable: false,
 		additionalProperties: false,
@@ -164,7 +179,49 @@ export const validatefrontHistoryPatchSchema = (body: any): { success: boolean, 
 			startTime: { type: "number" },
 			endTime: { type: "number" },
 			member: { type: "string" },
-			customStatus: { type: "string", maxLength: 50 }
+			customStatus: { type: "string", maxLength: 50 },
+			token: { type: "string" },
+			options: {
+				type: "object",
+				properties: {
+					name: { type: "boolean", },
+					avatar: { type: "boolean" },
+					pronouns: { type: "boolean" },
+					description: { type: "boolean" },
+					useDisplayName: { type: "boolean" },
+					color: { type: "boolean" },
+				},
+				nullable: false,
+				additionalProperties: false,
+				required: ["name", "avatar", "pronouns", "description", "useDisplayName", "color",]
+			}
+		},
+		nullable: false,
+		additionalProperties: false
+	};
+
+	return validateSchema(schema, body);
+}
+
+export const validatefrontHistoryDeleteSchema = (body: any): { success: boolean, msg: string } => {
+	const schema = {
+		type: "object",
+		properties: {
+			token: { type: "string" },
+			options: {
+				type: "object",
+				properties: {
+					name: { type: "boolean", },
+					avatar: { type: "boolean" },
+					pronouns: { type: "boolean" },
+					description: { type: "boolean" },
+					useDisplayName: { type: "boolean" },
+					color: { type: "boolean" },
+				},
+				nullable: false,
+				additionalProperties: false,
+				required: ["name", "avatar", "pronouns", "description", "useDisplayName", "color",]
+			}
 		},
 		nullable: false,
 		additionalProperties: false

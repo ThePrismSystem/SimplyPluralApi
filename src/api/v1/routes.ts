@@ -29,7 +29,7 @@ export const setupV1routes = (app: core.Express) => {
 	app.get("/v1/members/:system", isUserAuthenticated(ApiKeyAccessType.Read), member.getMembers)
 	app.post("/v1/member/:id?", isUserAuthenticated(ApiKeyAccessType.Write), validateBody(member.validatePostMemberSchema), validateId, member.add)
 	app.patch("/v1/member/:id", isUserAuthenticated(ApiKeyAccessType.Write), validateBody(member.validateMemberSchema), member.update)
-	app.delete("/v1/member/:id", isUserAuthenticated(ApiKeyAccessType.Delete), member.del)
+	app.delete("/v1/member/:id", isUserAuthenticated(ApiKeyAccessType.Delete), validateBody(member.validateDeleteMemberSchema), member.del)
 
 	// Notes
 	app.get("/v1/note/:system/:id", isUserAuthenticated(ApiKeyAccessType.Read), note.get)
@@ -83,7 +83,7 @@ export const setupV1routes = (app: core.Express) => {
 	app.get("/v1/frontHistory/:system/:id", isUserAuthenticated(ApiKeyAccessType.Read), frontHistory.get)
 	app.post("/v1/frontHistory/:id?", isUserAuthenticated(ApiKeyAccessType.Write), validateBody(frontHistory.validatefrontHistoryPostSchema), validateId, frontHistory.add)
 	app.patch("/v1/frontHistory/:id", isUserAuthenticated(ApiKeyAccessType.Write), validateBody(frontHistory.validatefrontHistoryPatchSchema), frontHistory.update)
-	app.delete("/v1/frontHistory/:id", isUserAuthenticated(ApiKeyAccessType.Delete), frontHistory.del)
+	app.delete("/v1/frontHistory/:id", isUserAuthenticated(ApiKeyAccessType.Delete), validateBody(frontHistory.validatefrontHistoryDeleteSchema), frontHistory.del)
 
 	// Groups
 	app.get("/v1/group/:system/:id", isUserAuthenticated(ApiKeyAccessType.Read), group.get)

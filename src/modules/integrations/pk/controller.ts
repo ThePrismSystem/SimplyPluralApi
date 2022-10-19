@@ -154,9 +154,15 @@ export const removeQueuedRequest = async (request: PkRequest) => {
 	await queuedRequests.deleteOne({ id: request.id });
 }
 
-const counter  = new promclient.Counter({
-	name: 'apparyllis_api_pk_syncs',
-	help: 'Counter for pk syncs performed',
+const memberCounter  = new promclient.Counter({
+	name: 'apparyllis_api_pk_member_syncs',
+	help: 'Counter for member pk syncs performed',
+	labelNames: ['method', 'statusCode'],
+});
+
+const frontSyncCounter  = new promclient.Counter({
+	name: 'apparyllis_api_pk_frontsync_syncs',
+	help: 'Counter for frontSync pk syncs performed',
 	labelNames: ['method', 'statusCode'],
 });
 	
@@ -169,51 +175,51 @@ export const dispatchTickRequests = async (request: PkRequest) => {
 
 	const type = request.type;
 	switch (type) {
-		case PkRequestType.Get: {
-			if (debug)
-			{
-				console.log("GET=>"+ request.path)
-			}
-			const result = await axios.get(request.path, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError)
-			counter.labels("GET", result?.status.toString() ?? "503").inc(1)
-			if (debug)
-			{
-				console.log("Response for GET=>"+ request.path)
-			}
-			request.response = result
-			pendingResponses.push(request)
-			break
+	case PkRequestType.Get: {
+		if (debug)
+		{
+			console.log("GET=>"+ request.path)
 		}
-		case PkRequestType.Post: {
-			if (debug)
-			{
-				console.log("POST=>"+ request.path)
-			}
-			const result = await axios.post(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError)
-			counter.labels("POST", result?.status.toString() ?? "503").inc(1)
-			if (debug)
-			{
-				console.log("Response for POST=>"+ request.path)
-			}			
-			request.response = result
-			pendingResponses.push(request)
-			break
+		const result = await axios.get(request.path, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError);
+		(request.purpose === 'Member' ? memberCounter : frontSyncCounter).labels("GET", result?.status.toString() ?? "503").inc(1);
+		if (debug)
+		{
+			console.log("Response for GET=>"+ request.path)
 		}
-		case PkRequestType.Patch: {
-			if (debug)
-			{
-				console.log("PATCH=>"+ request.path)
-			}
-			const result = await axios.patch(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError)
-			counter.labels("PATCH", result?.status.toString() ?? "503").inc(1)
-			if (debug)
-			{
-				console.log("Response for PATCH=>"+ request.path)
-			}
-			request.response = result
-			pendingResponses.push(request)
-			break
+		request.response = result
+		pendingResponses.push(request)
+		break
+	}
+	case PkRequestType.Post: {
+		if (debug)
+		{
+			console.log("POST=>"+ request.path)
 		}
+		const result = await axios.post(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError);
+		(request.purpose === 'Member' ? memberCounter : frontSyncCounter).labels("POST", result?.status.toString() ?? "503").inc(1);
+		if (debug)
+		{
+			console.log("Response for POST=>"+ request.path)
+		}			
+		request.response = result
+		pendingResponses.push(request)
+		break
+	}
+	case PkRequestType.Patch: {
+		if (debug)
+		{
+			console.log("PATCH=>"+ request.path)
+		}
+		const result = await axios.patch(request.path, request.data, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError);
+		(request.purpose === 'Member' ? memberCounter : frontSyncCounter).labels("PATCH", result?.status.toString() ?? "503").inc(1);
+		if (debug)
+		{
+			console.log("Response for PATCH=>"+ request.path)
+		}
+		request.response = result
+		pendingResponses.push(request)
+		break
+	}
 	}
 	
 	// Remove the completed request both from the pendingRequestIds array and mongo

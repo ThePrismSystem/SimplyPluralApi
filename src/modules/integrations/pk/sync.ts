@@ -254,6 +254,72 @@ export const syncMemberFromPk = async (options: syncOptions, pkMemberId: string,
 	}
 }
 
+export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: any[], frontDateTime: string, token: string, options: syncOptions) => {
+	// Get member documents for current fronters
+	let spFrontersResult = await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds }}).toArray();
+
+	dispatchCustomEvent({uid, type: "syncToUpdate", data: "Starting Sync"})
+
+	// Get pk system data
+	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
+	const systemResult = await addPendingRequest(getSystemRequest)
+
+	if (systemResult?.status !== 200)
+	{
+		return handlePkResponse(systemResult!);
+	}
+
+	// Get current pk members to determine if we need to sync any current fronters to pk before inserting the switch
+	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
+	const pkMembersResult = await addPendingRequest(getRequest)
+
+	const pkMembers: any[] = pkMembersResult?.data ?? []
+	if (!Array.isArray(pkMembers))
+	{
+		Sentry.captureMessage(`ErrorCode(${ERR_FUNCTIONALITY_EXPECTED_ARRAY})`, scope => {
+			scope.setExtra("payload", pkMembersResult?.data)
+			return scope;
+		});
+		return { success: true, msg: `Something went wrong, please try again later. ErrorCode(${ERR_FUNCTIONALITY_EXPECTED_ARRAY})` }
+	}
+
+	// Get any sp members not already synced with pk
+	const spMembersToSync = spFrontersResult.filter((member) => !pkMembers.map((pkMember) => pkMember.id).includes(member.pkId));
+
+	if (spMembersToSync.length) {
+		let lastUpdate = 0
+
+		for (let i = 0; i < spMembersToSync.length; ++i) {
+			const member = spMembersToSync[i];
+
+			const currentCount = i + 1;
+
+			if (moment.now() > lastUpdate + 1000)
+			{
+				dispatchCustomEvent({uid, type: "syncToUpdate", data: `Syncing ${member.name}, ${currentCount.toString()} out of ${spMembersToSync.length.toString()}`})
+				lastUpdate = moment.now()
+			}
+
+			const result = await syncMemberToPk(options, member._id, token, uid, undefined, systemResult?.data.id);
+			console.log(result)
+		}
+
+		// Get new member docs with any added pk ids
+		spFrontersResult = await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds }}).toArray();
+	}
+
+	// Insert the switch with pk
+	const switchData = {
+		timestamp: frontDateTime,
+		members: spFrontersResult.map((spFronter) => spFronter.pkId)
+	};
+
+	const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches`, token, response: null, data: switchData, type: PkRequestType.Post, id: "", purpose: 'FrontSync' }
+	await addPendingRequest(postRequest)
+
+	return;
+}
+
 export const syncAllSpMembersToPk = async (options: syncOptions, _allSyncOptions: syncAllOptions, token: string, userId: string): Promise<{ success: boolean, msg: string }> => {
 	const spMembersResult = await getCollection("members").find({ uid: userId }).toArray()
 
