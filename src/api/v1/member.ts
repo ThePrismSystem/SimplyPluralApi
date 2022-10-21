@@ -81,13 +81,13 @@ export const del = async (req: Request, res: Response) => {
 	await getCollection("frontHistory").updateOne({ uid: res.locals.uid, member: req.params.id, live: true }, { $set: { live: false, endTime: moment.now() } });
 
 	if (fhLive) {
-		frontChange(res.locals.uid, true, req.params.id, false);
+		frontChange(res.locals.uid, true, req.params.id, false, req.body.token, req.body.options);
 	}
 
 	// Delete this member from any groups they're in
 	getCollection("groups").find({ uid: res.locals.uid }).forEach((group: any) => {
 		const members : string[] = group.members ?? []
-		let newMembers = members.filter((member) => member != req.params.id);
+		const newMembers = members.filter((member) => member != req.params.id);
 		getCollection("groups").updateOne({uid: res.locals.uid, _id: parseId(group._id)}, {$set: {members: newMembers}})
 	})
 
