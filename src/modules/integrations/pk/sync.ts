@@ -254,9 +254,9 @@ export const syncMemberFromPk = async (options: syncOptions, pkMemberId: string,
 	}
 }
 
-export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: string[], frontDateTime: string, token: string, options: syncOptions) => {
+export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: string[], fronters: any[] | undefined, members: any[] | undefined, frontDateTime: string, token: string, options: syncOptions) => {
 	// Get member documents for current fronters
-	let spFrontersResult = await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds.map((memberId) => parseId(memberId)) }}).toArray();
+	let spFrontersResult = members ?? await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds.map((memberId) => parseId(memberId)) }}).toArray();
 
 	dispatchCustomEvent({uid, type: "syncToUpdate", data: "Starting Sync"})
 
@@ -309,8 +309,7 @@ export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: string
 	}
 
 	// Get current fronter entries to sort the fronters sent to pk
-	const frontersCollection = getCollection("frontHistory");
-	const frontersData = await frontersCollection.find({ uid: uid, live: true }).toArray();
+	const frontersData = fronters ?? await getCollection("frontHistory").find({ uid: uid, live: true }).toArray();
 
 	// Get sorted list of current fronter entries based on front startTime
 	const fronterPKIds = spFrontersResult.sort((spFronterA, spFronterB) => {

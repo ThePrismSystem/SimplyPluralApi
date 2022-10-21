@@ -31,9 +31,10 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 	const members = getCollection("members");
 	const frontStatuses = getCollection("frontStatuses");
 
-	// Array to store the Ids of current fronters for pk front syncing
+	// Arrays to store the ids + data of current fronters for pk front syncing
 	const fronterIds: Array<string> = [];
-	
+	const memberDocs: Array<any> = [];
+
 	const fronterNames: Array<string> = [];
 	const fronterNotificationNames: Array<string> = [];
 	const customFronterNames: Array<string> = [];
@@ -57,8 +58,10 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 		} else {
 			const doc = await members.findOne({ uid: uid, _id: parseId(fronter.member) });
 			if (doc !== null) {
-				// Push to array of fronter Ids for pk front syncing
+				// Push data to array of fronter ids + data for pk front syncing
 				fronterIds.push(doc._id);
+				memberDocs.push(doc);
+
 				if (doc.private !== undefined && doc.private !== null && doc.private === false) {
 					if (doc.preventsFrontNotifs !== true) {
 						fronterNotificationNames.push(doc.name);
@@ -81,7 +84,7 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 
 	// Sync fronters with pk as long as a token and sync options were passed in the request that changed front
 	if (token !== undefined && syncOptions !== undefined) {
-		syncFrontersWithPk(uid, fronterIds, new Date().toISOString(), token, syncOptions);
+		syncFrontersWithPk(uid, fronterIds, frontersData, memberDocs, new Date().toISOString(), token, syncOptions);
 	}
 
 	customFronterNames.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
