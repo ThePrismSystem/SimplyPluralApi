@@ -237,7 +237,7 @@ export const fetchCollection = async (req: Request, res: Response, collection: s
 	sendDocuments(req, res, collection, documents);
 }
 
-export const addSimpleDocument = async (req: Request, res: Response, collection: string) => {
+export const addSimpleDocument = async (req: Request, res: Response, collection: string): Promise<{ insertedId: string; acknowledged: boolean; }> => {
 	const dataObj: documentObject = req.body;
 	dataObj._id = res.locals.useId ?? new ObjectID();
 	dataObj.uid = res.locals.uid;
@@ -251,10 +251,12 @@ export const addSimpleDocument = async (req: Request, res: Response, collection:
 
 	if (result.insertedId.toString().length <= 0) {
 		res.status(500).send("Server processed your request, however was unable to enter a document into the database");
-		return;
+		return { insertedId: "", acknowledged: false };
 	}
 
 	res.status(200).send(result.insertedId);
+
+	return { insertedId: result.insertedId.toString(), acknowledged: true }
 }
 
 export const updateSimpleDocument = async (req: Request, res: Response, collection: string) => {

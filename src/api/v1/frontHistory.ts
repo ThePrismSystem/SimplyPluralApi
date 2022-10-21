@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import moment from "moment";
-import { min } from "moment";
-import { frontChange } from "../../modules/events/frontChange";
+import { frontChange, frontChangeToPk } from "../../modules/events/frontChange";
 import { getCollection, parseId } from "../../modules/mongo";
 import { documentObject } from "../../modules/mongo/baseTypes";
 import { fetchSimpleDocument, addSimpleDocument, updateSimpleDocument, sendDocuments, deleteSimpleDocument, fetchCollection, isMemberOrCustomFront, isCustomFront } from "../../util";
@@ -9,13 +8,13 @@ import { validateSchema } from "../../util/validation";
 
 export const getFrontTimeRangeQuery = (req: Request, res: Response) => {
 	return  { $and: [{ uid: res.locals.uid }, {
-			$or: [
-				{ $and: [ {endTime: { $gte: Number(req.query.endTime) } }, { startTime: { $lte: Number(req.query.startTime) }}, { endTime: { $gte: Number(req.query.startTime) }} ]},  // starts after start, ends after end, but doesn't start after end
-				{ startTime: { $lte: Number(req.query.startTime) }, endTime: { $gte: Number(req.query.startTime) } }, //start before start, ends after start
-				{ startTime: { $gte: Number(req.query.startTime) }, endTime: { $lte: Number(req.query.endTime) } }, // start after start, ends before end
-				{ startTime: { $lte: Number(req.query.endTime) }, endTime: { $gte: Number(req.query.endTime) } } //Starts before end, ends after end
-			]
-		}]
+		$or: [
+			{ $and: [ {endTime: { $gte: Number(req.query.endTime) } }, { startTime: { $lte: Number(req.query.startTime) }}, { endTime: { $gte: Number(req.query.startTime) }} ]},  // starts after start, ends after end, but doesn't start after end
+			{ startTime: { $lte: Number(req.query.startTime) }, endTime: { $gte: Number(req.query.startTime) } }, //start before start, ends after start
+			{ startTime: { $gte: Number(req.query.startTime) }, endTime: { $lte: Number(req.query.endTime) } }, // start after start, ends before end
+			{ startTime: { $lte: Number(req.query.endTime) }, endTime: { $gte: Number(req.query.endTime) } } //Starts before end, ends after end
+		]
+	}]
 	};
 }
 
@@ -66,8 +65,13 @@ export const add = async (req: Request, res: Response) => {
 		req.body.startTime = req.body.endTime - 1;
 	}
 
-	await addSimpleDocument(req, res, "frontHistory");
-	frontChange(res.locals.uid, false, req.body.member, true, req.body.live === true ? req.body.token : undefined, req.body.live === true ? req.body.options : undefined)
+	const addFrontHistory = await addSimpleDocument(req, res, "frontHistory");
+
+	frontChange(res.locals.uid, false, req.body.member, true)
+
+	if (req.body.token && req.body.options) {
+		frontChangeToPk(res.locals.uid, req.body.token, req.body.options, addFrontHistory.insertedId);
+	}
 }
 
 export const update = async (req: Request, res: Response) => {
@@ -112,7 +116,12 @@ export const update = async (req: Request, res: Response) => {
 		await getCollection("frontHistory").updateOne({ _id: parseId(req.params.id) }, { $set: { custom: isCustom } })
 
 		if (frontingDoc.live === true && req.body.live === false) {
-			frontChange(res.locals.uid, false, req.body.member ?? frontingDoc.member, true, req.body.token, req.body.options)
+			frontChange(res.locals.uid, false, req.body.member ?? frontingDoc.member, true)
+		}
+
+		// Sync front change to pk if the existing front has an associated pk switch id OR if the front entry is now live and it wasn't before
+		if (req.body.token && req.body.options && (frontingDoc.pkId || (frontingDoc.live === true && req.body.live === false))) {
+			frontChangeToPk(res.locals.uid, req.body.token, req.body.options, frontingDoc._id, frontingDoc, true);
 		}
 	}
 	else {
@@ -129,7 +138,12 @@ export const del = async (req: Request, res: Response) => {
 	// If a fronting document is deleted, and it's a live one, notify front change
 	if (frontingDoc) {
 		if (frontingDoc.live === true) {
-			frontChange(res.locals.uid, true, frontingDoc.member, true, req.body.token, req.body.options)
+			frontChange(res.locals.uid, true, frontingDoc.member, true)
+
+			// Sync front change to pk if the existing front has an associated pk switch id OR if the front entry being deleted was live
+			if (req.body.token && req.body.options && (frontingDoc.pkId || frontingDoc.live === true)) {
+				frontChangeToPk(res.locals.uid, req.body.token, req.body.options, frontingDoc._id, frontingDoc, false, true);
+			}
 		}
 	}
 
@@ -146,6 +160,7 @@ export const validatefrontHistoryPostSchema = (body: any): { success: boolean, m
 			endTime: { type: "number" },
 			member: { type: "string" },
 			customStatus: { type: "string", maxLength: 50 },
+			pkId: { type: "string" },
 			token: { type: "string" },
 			options: {
 				type: "object",
@@ -180,6 +195,7 @@ export const validatefrontHistoryPatchSchema = (body: any): { success: boolean, 
 			endTime: { type: "number" },
 			member: { type: "string" },
 			customStatus: { type: "string", maxLength: 50 },
+			pkId: { type: "string" },
 			token: { type: "string" },
 			options: {
 				type: "object",

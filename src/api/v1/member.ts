@@ -81,7 +81,7 @@ export const del = async (req: Request, res: Response) => {
 	await getCollection("frontHistory").updateOne({ uid: res.locals.uid, member: req.params.id, live: true }, { $set: { live: false, endTime: moment.now() } });
 
 	if (fhLive) {
-		frontChange(res.locals.uid, true, req.params.id, false, req.body.token, req.body.options);
+		frontChange(res.locals.uid, true, req.params.id, false);
 	}
 
 	// Delete this member from any groups they're in
@@ -114,7 +114,7 @@ export const validateMemberSchema = (body: any): { success: boolean, msg: string
 			private: { type: "boolean" },
 			preventTrusted: { type: "boolean" },
 			preventsFrontNotifs
-				: { type: "boolean" },
+			: { type: "boolean" },
 			info: {
 				type: "object",
 				properties: {
@@ -145,7 +145,7 @@ export const validatePostMemberSchema = (body: any): { success: boolean, msg: st
 			private: { type: "boolean" },
 			preventTrusted: { type: "boolean" },
 			preventsFrontNotifs
-				: { type: "boolean" },
+			: { type: "boolean" },
 			info: {
 				type: "object",
 				properties: {

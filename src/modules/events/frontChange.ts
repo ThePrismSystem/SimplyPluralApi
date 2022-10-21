@@ -3,9 +3,63 @@ import { logger } from "../logger";
 import { getCollection, parseId } from "../mongo";
 import { notifyOfFrontChange } from "./automatedReminder";
 import { performEvent } from "./eventController";
-import { syncFrontersWithPk, syncOptions } from "../integrations/pk/sync";
+import { changePkSwitchTime, deletePkSwitch, replacePkSwitchMember, syncCurrentFrontersWithPk, syncOptions } from "../integrations/pk/sync";
 
-export const frontChange = async (uid: string, removed: boolean, memberId: string, notifyReminders: boolean, token?: string, syncOptions?: syncOptions) => {
+export const frontChangeToPk = async (uid: string, token: string, syncOptions: syncOptions, frontingDocId?: any, oldFrontingDoc?: any, frontingDocChanged = false, frontingDocRemoved = false) => {
+	console.log('frontingDocId', frontingDocId);
+	console.log('oldFrontingDoc', oldFrontingDoc);
+	console.log('frontingDocChanged', frontingDocChanged);
+	console.log('frontingDocRemoved', frontingDocRemoved);
+	if (frontingDocChanged) {
+		const frontersCollection = getCollection("frontHistory");
+		const newFrontingDoc = await frontersCollection.findOne({ _id: parseId(frontingDocId) });
+
+		if (oldFrontingDoc.member !== newFrontingDoc.member) {
+			const members = getCollection("members");
+
+			const oldMemberDoc = await members.findOne({ uid: uid, _id: parseId(oldFrontingDoc.member) });
+			const newMemberDoc = await members.findOne({ uid: uid, _id: parseId(newFrontingDoc.member) });
+
+			if (oldMemberDoc.pkId) {
+				await replacePkSwitchMember(newFrontingDoc.pkId, token, syncOptions, uid, oldMemberDoc, newMemberDoc, newMemberDoc.pkId === undefined);
+			}
+		}
+		
+		if (oldFrontingDoc.startTime !== newFrontingDoc.startTime) {
+			changePkSwitchTime(oldFrontingDoc.pkId, token, newFrontingDoc.startTime);
+		}
+	} else if (frontingDocRemoved && oldFrontingDoc.pkId) {
+		deletePkSwitch(oldFrontingDoc.pkId, token);
+	} else {
+		const frontersCollection = getCollection("frontHistory");
+		const frontersData = await frontersCollection.find({ uid: uid, live: true }).toArray();
+	
+		const members = getCollection("members");
+	
+		// Arrays to store the ids + data of current fronters for pk front syncing
+		const fronterIds: Array<string> = [];
+		const memberDocs: Array<any> = [];
+	
+		for (let i = 0; i < frontersData.length; ++i) {
+			const fronter = frontersData[i];
+			if (!fronter.custom) {
+				const doc = await members.findOne({ uid: uid, _id: parseId(fronter.member) });
+				if (doc !== null) {
+					// Push data to array of fronter ids + data for pk front syncing
+					fronterIds.push(doc._id);
+					memberDocs.push(doc);
+				} else {
+					logger.warn("cannot find " + fronter);
+				}
+			}
+		}
+	
+		// Sync current fronters with pk
+		syncCurrentFrontersWithPk(uid, fronterIds, frontersData, new Date().toISOString(), token, syncOptions, frontingDocId);
+	}
+}
+
+export const frontChange = async (uid: string, removed: boolean, memberId: string, notifyReminders: boolean) => {
 
 	if (notifyReminders === true)
 	{
@@ -31,10 +85,6 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 	const members = getCollection("members");
 	const frontStatuses = getCollection("frontStatuses");
 
-	// Arrays to store the ids + data of current fronters for pk front syncing
-	const fronterIds: Array<string> = [];
-	const memberDocs: Array<any> = [];
-
 	const fronterNames: Array<string> = [];
 	const fronterNotificationNames: Array<string> = [];
 	const customFronterNames: Array<string> = [];
@@ -58,10 +108,6 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 		} else {
 			const doc = await members.findOne({ uid: uid, _id: parseId(fronter.member) });
 			if (doc !== null) {
-				// Push data to array of fronter ids + data for pk front syncing
-				fronterIds.push(doc._id);
-				memberDocs.push(doc);
-
 				if (doc.private !== undefined && doc.private !== null && doc.private === false) {
 					if (doc.preventsFrontNotifs !== true) {
 						fronterNotificationNames.push(doc.name);
@@ -80,11 +126,6 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 				logger.warn("cannot find " + fronter);
 			}
 		}
-	}
-
-	// Sync fronters with pk as long as a token and sync options were passed in the request that changed front
-	if (token !== undefined && syncOptions !== undefined) {
-		syncFrontersWithPk(uid, fronterIds, frontersData, memberDocs, new Date().toISOString(), token, syncOptions);
 	}
 
 	customFronterNames.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
@@ -170,7 +211,6 @@ export const frontChange = async (uid: string, removed: boolean, memberId: strin
 	if (foundFriends.length <= 0) {
 		return;
 	}
-
 };
 
 export const notifySharedFrontDue = async (uid: string, _event: any) => {

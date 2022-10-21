@@ -9,7 +9,8 @@ import promclient from "prom-client"
 export enum PkRequestType {
 	Get,
 	Post,
-	Patch
+	Patch,
+	Delete
 }
 
 export interface PkRequest {
@@ -215,6 +216,21 @@ export const dispatchTickRequests = async (request: PkRequest) => {
 		if (debug)
 		{
 			console.log("Response for PATCH=>"+ request.path)
+		}
+		request.response = result
+		pendingResponses.push(request)
+		break
+	}
+	case PkRequestType.Delete: {
+		if (debug)
+		{
+			console.log("DELETE=>"+ request.path)
+		}
+		const result = await axios.delete(request.path, { headers: { authorization: request.token, "X-PluralKit-App": request.purpose === 'Member' ? memberPluralKitAppHeader : frontSyncPluralKitAppHeader } }).catch(handleError);
+		(request.purpose === 'Member' ? memberCounter : frontSyncCounter).labels("DELETE", result?.status.toString() ?? "503").inc(1);
+		if (debug)
+		{
+			console.log("Response for DELETE=>"+ request.path)
 		}
 		request.response = result
 		pendingResponses.push(request)

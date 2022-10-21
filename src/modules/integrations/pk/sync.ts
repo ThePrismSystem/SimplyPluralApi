@@ -254,9 +254,77 @@ export const syncMemberFromPk = async (options: syncOptions, pkMemberId: string,
 	}
 }
 
-export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: string[], fronters: any[] | undefined, members: any[] | undefined, frontDateTime: string, token: string, options: syncOptions) => {
+export const changePkSwitchTime = async (switchPkId: string, token: string, newTime: string) => {
+	// Get pk system data required for replacing the time of a pk switch
+	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
+	const systemResult = await addPendingRequest(getSystemRequest)
+
+	if (systemResult?.status !== 200)
+	{
+		return;
+	}
+
+	// Change the switch time in the existing pk switch
+	const patchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}`, token, response: null, data: { timestamp: new Date(newTime).toISOString() }, type: PkRequestType.Patch, id: "", purpose: 'FrontSync' }
+	await addPendingRequest(patchRequest);
+}
+
+export const replacePkSwitchMember = async (switchPkId: string, token: string, options: syncOptions, uid: string, oldMemberDoc: any, newMemberDoc: any, needToSyncNewMember: boolean) => {
+	// Get pk system data required for replacing the member of a pk switch
+	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
+	const systemResult = await addPendingRequest(getSystemRequest)
+
+	if (systemResult?.status !== 200)
+	{
+		return;
+	}
+
+	let newMemberDocFinal = newMemberDoc;
+
+	// Sync new member of the switch to pk if needed
+	if (needToSyncNewMember) {
+		await syncMemberToPk(options, newMemberDoc._id, token, uid, undefined, systemResult?.data.id);
+
+		newMemberDocFinal = await getCollection("members").findOne({ uid, _id: parseId(newMemberDoc._id) });
+	}
+	
+	// Get current switch data from pk
+	const getSwitchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
+	const switchResult = await addPendingRequest(getSwitchRequest)
+
+	if (switchResult?.status !== 200)
+	{
+		return;
+	}
+
+	const currentSwitchData = switchResult.data;
+	const currentSwitchMembers = currentSwitchData.members;
+
+	const newSwitchMembersArray = currentSwitchMembers.map((switchMember: any) => switchMember === oldMemberDoc.pkId ? newMemberDocFinal.pkId : oldMemberDoc.pkId);
+
+	// Replace the old member with the new member in the pk switch
+	const patchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}/members`, token, response: null, data: newSwitchMembersArray, type: PkRequestType.Patch, id: "", purpose: 'FrontSync' }
+	await addPendingRequest(patchRequest);
+}
+
+export const deletePkSwitch = async (switchPkId: string, token: string) => {
+	// Get pk system data required for deleting a switch
+	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
+	const systemResult = await addPendingRequest(getSystemRequest)
+
+	if (systemResult?.status !== 200)
+	{
+		return;
+	}
+
+	// Delete the switch within pk
+	const deleteRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}`, token, response: null, data: undefined, type: PkRequestType.Delete, id: "", purpose: 'FrontSync' }
+	await addPendingRequest(deleteRequest);
+}
+
+export const syncCurrentFrontersWithPk = async (uid: string, fronterSPMemberIds: string[], fronters: any[] | undefined, frontDateTime: string, token: string, options: syncOptions, insertedFrontingDocId: string) => {
 	// Get member documents for current fronters
-	let spFrontersResult = members ?? await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds.map((memberId) => parseId(memberId)) }}).toArray();
+	let spFrontersResult = await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds.map((memberId) => parseId(memberId)) }}).toArray();
 
 	dispatchCustomEvent({uid, type: "syncToUpdate", data: "Starting Sync"})
 
@@ -266,7 +334,7 @@ export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: string
 
 	if (systemResult?.status !== 200)
 	{
-		return handlePkResponse(systemResult!);
+		return;
 	}
 
 	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
@@ -279,7 +347,7 @@ export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: string
 			scope.setExtra("payload", pkMembersResult?.data)
 			return scope;
 		});
-		return { success: true, msg: `Something went wrong, please try again later. ErrorCode(${ERR_FUNCTIONALITY_EXPECTED_ARRAY})` }
+		return;
 	}
 
 	// Get any sp members not already synced with pk
@@ -326,9 +394,15 @@ export const syncFrontersWithPk = async (uid: string, fronterSPMemberIds: string
 	};
 
 	const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches`, token, response: null, data: switchData, type: PkRequestType.Post, id: "", purpose: 'FrontSync' }
-	await addPendingRequest(postRequest)
+	const postResult = await addPendingRequest(postRequest);
 
-	return;
+	if (postResult?.status !== 200)
+	{
+		return;
+	}
+
+	// Update the applicable front history entry with the associated pk id
+	await getCollection("frontHistory").updateOne({ _id: parseId(insertedFrontingDocId) }, { $set: { pkId: postResult.data.id }});
 }
 
 export const syncAllSpMembersToPk = async (options: syncOptions, _allSyncOptions: syncAllOptions, token: string, userId: string): Promise<{ success: boolean, msg: string }> => {
