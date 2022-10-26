@@ -1,5 +1,5 @@
 import { startMailTransport } from "../modules/mail";
-import { startPkController } from "../modules/integrations/pk/controller";
+import { startPkRequestController } from "./integrations/pk/requestController";
 import { logger } from "../modules/logger";
 import * as socket from "../modules/socket";
 import * as Mongo from "../modules/mongo";
@@ -14,6 +14,7 @@ import express from "express";
 import { validateOperationTime } from "../util/validation";
 import { NextFunction, Request, Response } from "express-serve-static-core";
 import cors from "cors";
+import { startPkSyncController } from "./integrations/pk/syncController";
 
 export const initializeServer = async () => {
 	const app = express();
@@ -76,7 +77,8 @@ export const startServer = async (app : any, mongourl: string) => {
 	server.listen(port, () => logger.info(`Initiating Apparyllis API at :${port}`));
 	console.log(`Started server on port ${port.toString()}`)
 
-	startPkController();
+	startPkRequestController();
+	startPkSyncController();
 	startMailTransport();
 
 	return server;

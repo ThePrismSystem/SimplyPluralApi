@@ -4,12 +4,98 @@ import { getCollection, parseId } from "../mongo";
 import { notifyOfFrontChange } from "./automatedReminder";
 import { performEvent } from "./eventController";
 import { changePkSwitchTime, deletePkSwitch, replacePkSwitchMember, syncCurrentFrontersWithPk, syncOptions } from "../integrations/pk/sync";
+import { addPendingSync, getAllQueuedSyncsForUser, PkSyncType, SPFrontHistoryEntry } from "../integrations/pk/syncController";
+import { ObjectId } from "mongodb";
 
-export const frontChangeToPk = async (uid: string, token: string, syncOptions: syncOptions, frontingDocId?: any, oldFrontingDoc?: any, frontingDocChanged = false, frontingDocRemoved = false) => {
-	console.log('frontingDocId', frontingDocId);
-	console.log('oldFrontingDoc', oldFrontingDoc);
-	console.log('frontingDocChanged', frontingDocChanged);
-	console.log('frontingDocRemoved', frontingDocRemoved);
+export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
+	// Get all applicable front sync events for the user
+	const userPkQueuedSyncs = await getAllQueuedSyncsForUser(uid);
+
+	// Scenarios to handle
+	// 	- Adding a user directly to front
+	//  - Changing a fronting member's front start time
+	//  - Removing a user from front
+	//  - Changing a past front history entry
+	//  - Deleting a past front history entry
+
+	// For inserting (non-live) - Check if switch exists at exact starttime. If it does, insert member to that switch, if not, insert a new switch. get all switches between starttime and endtime (inclusive) of the fronthistory entry and add member to those switches. check for switch at exact timestamp of endtime. If exists, make sure member doesn't exist in that switch, if does not exist, insert new switch with members of most recent switch before that switch without the new fronthistory entry member
+	// For inserting (live) - Check if switch exists at exact starttime. If it does, insert member to that switch, if not, insert a new switch. get all switches between starttime and endtime (inclusive) of the fronthistory entry and add member to those switches.
+	// For updating (live) - Get all switches between min starttime (between old and new fronthistory entry) and now. Remove member from applicable switches (along with inserting empty switches if needed), add member to applicable switches, and insert new switch at starttime if needed
+	// For updating (non-live) - Get all switches between min starttime (between old and new fronthistory entry) and max endtime (between old and new fronthistory entry). Remove member from applicable switches (along with inserting empty switches if needed), add member to applicable switches, and insert new switch at starttime and/or endtime if needed
+	// For deleting (live) - Get all pk switches between starttime and now (inclusive) of the deleted fronthistory entry. Remove member from those switches. If any switches only have that member, insert an empty switch from the previous switch with another member to the next switch with another member
+	// For deleting (non-live) - Get all pk switches between starttime and endtime (inclusive) of the deleted fronthistory entry. Remove member from those switches. If any switches only have that member, insert an empty switch from the previous switch with another member to the next switch with another member
+
+	// Handle insert syncs first
+	const insertSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Insert);
+
+	// This array is used to track any fronting docs that are combined before switches are inserted into pk
+	const insertFrontingDocIdsHandled = [];
+
+	const insertSyncPromises = [];
+
+	// Loop through insert syncs and perform logic to 
+	insertSyncs.forEach((sync) => {
+
+	});
+
+	const includedInsertSync = userPkQueuedSyncs.find((queuedSync) => queuedSync.sync.type === PkSyncType.Insert);
+
+	// If there is an included insert sync, we need to change current fronters in pk
+	if (includedInsertSync) {
+		const frontersCollection = getCollection("frontHistory");
+		const frontersData = await frontersCollection.find({ uid: uid, live: true }).toArray();
+	
+		const members = getCollection("members");
+	
+		// Arrays to store the ids + data of current fronters for pk front syncing
+		const fronterIds: Array<string> = [];
+		const memberDocs: Array<any> = [];
+	
+		for (let i = 0; i < frontersData.length; ++i) {
+			const fronter = frontersData[i];
+			if (!fronter.custom) {
+				const doc = await members.findOne({ uid: uid, _id: parseId(fronter.member) });
+				if (doc !== null) {
+					// Push data to array of fronter ids + data for pk front syncing
+					fronterIds.push(doc._id);
+					memberDocs.push(doc);
+				} else {
+					logger.warn("cannot find " + fronter);
+				}
+			}
+		}
+	
+		// Sync current fronters with pk
+		syncCurrentFrontersWithPk(uid, fronterIds, frontersData, new Date().toISOString(), token, syncOptions, frontingDocId);
+	}
+}
+
+export const frontChangeToPk = async (uid: string, token: string, syncOptions: syncOptions, live: boolean, frontingDocId: string, oldFrontingDoc?: SPFrontHistoryEntry, frontingDocChanged = false, frontingDocRemoved = false) => {
+	// Enqueue an event for front sync for this user. The event controller will wait for 10 seconds without any front changes to perform the sync
+	performEvent('frontSyncToPk', uid, 10 * 1000);
+
+	// Determine the type of the pk sync
+	const type = frontingDocRemoved ? PkSyncType.Delete : frontingDocChanged ? PkSyncType.Update : PkSyncType.Insert;
+
+	// Set applicable data for the pk sync
+	const data = {
+		live,
+		frontingDocId,
+		oldFrontingDoc,
+	};
+
+	// Add the pending sync to the pk sync controller
+	addPendingSync({
+		_id: new ObjectId(),
+		uid,
+		token,
+		syncOptions,
+		type,
+		data
+	})
+}
+
+export const initiateFrontChangeToPk = async (uid: string, token: string, syncOptions: syncOptions, frontingDocId?: any, oldFrontingDoc?: any, frontingDocChanged = false, frontingDocRemoved = false) => {
 	if (frontingDocChanged) {
 		const frontersCollection = getCollection("frontHistory");
 		const newFrontingDoc = await frontersCollection.findOne({ _id: parseId(frontingDocId) });

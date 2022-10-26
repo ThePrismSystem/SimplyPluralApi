@@ -1,7 +1,7 @@
 import { logger } from "../logger";
 import { getCollection } from "../mongo";
 import { automatedRemindersDueEvent, removeDeletedReminders } from "./automatedReminder";
-import { notifyPrivateFrontDue, notifySharedFrontDue } from "./frontChange";
+import { notifyPrivateFrontDue, notifySharedFrontDue, initiateFrontSyncToPk } from "./frontChange";
 import { repeatRemindersDueEvent, repeatRemindersEvent } from "./repeatReminders";
 type bindFunc = (uid: string, event: any) => void;
 const _boundEvents = new Map<string, bindFunc>();
@@ -13,6 +13,7 @@ const bindEvents = async () => {
 	_boundEvents.set("scheduledAutomatedReminder", automatedRemindersDueEvent);
 	_boundEvents.set("frontChangeShared", notifySharedFrontDue);
 	_boundEvents.set("frontChangePrivate", notifyPrivateFrontDue);
+	_boundEvents.set("frontSyncToPk", initiateFrontSyncToPk);
 };
 
 const runEvents = async () => {

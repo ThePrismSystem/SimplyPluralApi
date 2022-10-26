@@ -1,12 +1,10 @@
-import { AxiosResponse } from "axios";
 import { AnyBulkWriteOperation } from "mongodb";
-import { ERR_FUNCTIONALITY_EXPECTED_ARRAY } from "../../errors";
 import { getCollection, parseId } from "../../mongo"
 import { dispatchCustomEvent } from "../../socket";
-import { addPendingRequest, PkRequest, PkRequestType } from "./controller"
-import * as Sentry from "@sentry/node";
+import { PkAPI, PkAPIError } from "./api";
 import moment from "moment";
-import validUrl from "valid-url"
+import validUrl from "valid-url";
+import { PkInsertMember, PkMember, PkUpdateMember } from "./types";
 export interface syncOptions {
 	name: boolean,
 	avatar: boolean,
@@ -60,20 +58,23 @@ const limitStringLength = (value: string | undefined, length: number) => {
 	return newValue;
 }
 
-const handlePkResponse = (requestResponse: AxiosResponse<any, any> | {status: number}) =>
-{ 	
-	if (requestResponse.status === 401) {
-		return { success: false, msg: `Failed to sync. PluralKit token is invalid.` }
-	} else if (requestResponse.status === 403) {
-		return { success: false, msg: `Failed to sync. You do not have access to this member.` }
-	} else if (requestResponse.status === 502 || requestResponse.status === 503 || requestResponse.status === 504) {
-		return { success: false, msg: `Failed to sync. We're unable to reach PluralKit.` }
+const handlePkAPIError = (e: any) => { 	
+	if (e instanceof PkAPIError) {
+		if (e.status === 401) {
+			return { success: false, msg: `Failed to sync. PluralKit token is invalid.` }
+		} else if (e.status === 403) {
+			return { success: false, msg: `Failed to sync. You do not have access to this member.` }
+		} else if (e.status === 502 || e.status === 503 || e.status === 504) {
+			return { success: false, msg: `Failed to sync. We're unable to reach PluralKit.` }
+		} else {
+			return { success: false, msg: `${e.status?.toString() ?? ""}` }
+		}
 	} else {
-		return { success: false, msg: `${requestResponse.status?.toString() ?? ""}` }
+		return { success: false, msg: `Unable to reach PluralKit's servers` };
 	}
 }
 
-export const syncMemberToPk = async (options: syncOptions, spMemberId: string, token: string, userId: string, memberData: any | undefined, knownSystemId: string | undefined): Promise<{ success: boolean, msg: string }> => {
+export const syncMemberToPk = async (options: syncOptions, spMemberId: string, token: string, userId: string, memberData: PkMember | undefined, knownSystemId: string | undefined): Promise<{ success: boolean, msg: string }> => {
 	const spMemberResult = await getCollection("members").findOne({ uid: userId, _id: parseId(spMemberId) })
 
 	let { name, avatarUrl, pronouns, desc } = spMemberResult;
@@ -84,7 +85,7 @@ export const syncMemberToPk = async (options: syncOptions, spMemberId: string, t
 	pronouns = limitStringLength(pronouns, 100)
 	desc = limitStringLength(desc, 1000)
 
-	const memberDataToSync: any = {}
+	const memberDataToSync: PkUpdateMember | PkInsertMember = {}
 	if (options.name) {
 		if (options.useDisplayName) {
 			memberDataToSync.display_name = name;
@@ -110,15 +111,33 @@ export const syncMemberToPk = async (options: syncOptions, spMemberId: string, t
 		}
 	}
 
+	const pkAPI = new PkAPI(token, 'Member');
+
 	if (spMemberResult) {
 		const pkId: string | undefined | null = spMemberResult.pkId;
-		if (pkId && pkId.length === 5) {
-			const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${spMemberResult.pkId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
-			const pkMemberResult = memberData ?? await addPendingRequest(getRequest)
 
-			let status = memberData ? 200 : pkMemberResult?.status;
+		if (pkId && pkId.length === 5) {
+			let pkMemberResult = memberData;
+			let status = memberData ? 200 : undefined;
+
+			if (pkMemberResult === undefined) {
+				try {
+					pkMemberResult = await pkAPI.getMember(spMemberResult.pkId);
+				} catch (e) {
+					if (e instanceof PkAPIError) {
+						if ([404, 403].includes(e.status)) {
+							status = e.status;
+						} else {
+							return handlePkAPIError(e);
+						}
+					} else {
+						return handlePkAPIError(e);
+					}
+				}
+			}
+
 			if (pkMemberResult) {
-				const getResultSystemId = pkMemberResult.data?.system ?? undefined;
+				const getResultSystemId = pkMemberResult.system ?? undefined;
 				const memberSystemId = memberData ? knownSystemId : getResultSystemId
 				if (status == 200 && (knownSystemId && memberSystemId != knownSystemId)) 
 				{
@@ -126,52 +145,41 @@ export const syncMemberToPk = async (options: syncOptions, spMemberId: string, t
 				}
 
 				if (status == 200) {
-					const patchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${spMemberResult.pkId}`, token, response: null, data: memberDataToSync, type: PkRequestType.Patch, id: "", purpose: 'Member' }
-					const patchResult = await addPendingRequest(patchRequest)
-					if (patchResult) {
-						if (patchResult.status === 200) {
-							return { success: true, msg: `${name} updated on PluralKit` }
-						}
-						else {
-							return handlePkResponse(patchResult);
-						}
+					try {
+						await pkAPI.updateMember(spMemberResult.pkId, memberDataToSync);
+
+						return { success: true, msg: `${name} updated on PluralKit` };
+					} catch (e) {
+						return handlePkAPIError(e);
 					}
 				}
 				else if (status === 404 || status === 403) {
 					memberDataToSync.name = name;
-					const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members`, token, response: null, data: memberDataToSync, type: PkRequestType.Post, id: "", purpose: 'Member' }
-					const postResult = await addPendingRequest(postRequest)
-					if (postResult) {
-						if (postResult.status === 200) {
-							await getCollection("members").updateOne({ uid: userId, _id: parseId(spMemberId) }, { $set: { pkId: postResult.data.id } })
-							return { success: true, msg: `${name} added to PluralKit` }
-						}
-						else {
-							return handlePkResponse(postResult);
-						}
+
+					try {
+						const insertedMember = await pkAPI.insertMember(memberDataToSync as PkInsertMember);
+
+						await getCollection("members").updateOne({ uid: userId, _id: parseId(spMemberId) }, { $set: { pkId: insertedMember.id } });
+						
+						return { success: true, msg: `${name} added to PluralKit` };
+					} catch (e) {
+						return handlePkAPIError(e);
 					}
 				}
-				else {
-					return handlePkResponse(pkMemberResult);
-				}
 			}
-
-			return { success: false, msg: `Unable to reach PluralKit's servers` }
 		}
 		else {
 			memberDataToSync.name = name;
-			const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members`, token, response: null, data: memberDataToSync, type: PkRequestType.Post, id: "", purpose: 'Member' }
-			const postResult = await addPendingRequest(postRequest)
 
-			if (postResult) {
-				if (postResult.status === 200) {
-					await getCollection("members").updateOne({ uid: userId, _id: parseId(spMemberId) }, { $set: { pkId: postResult.data.id } })
-					return { success: true, msg: `${name} added to PluralKit` }
-				}
-				return handlePkResponse(postResult);
+			try {
+				const insertedMember = await pkAPI.insertMember(memberDataToSync as PkInsertMember);
+
+				await getCollection("members").updateOne({ uid: userId, _id: parseId(spMemberId) }, { $set: { pkId: insertedMember.id } });
+						
+				return { success: true, msg: `${name} added to PluralKit` };
+			} catch (e) {
+				return handlePkAPIError(e);
 			}
-
-			return { success: false, msg: `Unable to reach PluralKit's servers` }
 		}
 	}
 
@@ -182,20 +190,13 @@ export const syncMemberFromPk = async (options: syncOptions, pkMemberId: string,
 
 	let data: any | undefined = memberData;
 
+	const pkAPI = new PkAPI(token, 'Member');
+
 	if (!memberData) {
-		const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/members/${pkMemberId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
-		const pkMemberResult = await addPendingRequest(getRequest)
-		if (pkMemberResult) {
-			if (pkMemberResult.status === 200) {
-				data = pkMemberResult.data;
-			}
-			else 
-			{
-				return handlePkResponse(pkMemberResult);
-			}
-		}
-		else {
-			return { success: false, msg: `Unable to reach PluralKit's servers` }
+		try {
+			data = await pkAPI.getMember(pkMemberId);
+		} catch (e) {
+			return handlePkAPIError(e);
 		}
 	}
 
@@ -254,184 +255,28 @@ export const syncMemberFromPk = async (options: syncOptions, pkMemberId: string,
 	}
 }
 
-export const changePkSwitchTime = async (switchPkId: string, token: string, newTime: string) => {
-	// Get pk system data required for replacing the time of a pk switch
-	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
-	const systemResult = await addPendingRequest(getSystemRequest)
-
-	if (systemResult?.status !== 200)
-	{
-		return;
-	}
-
-	// Change the switch time in the existing pk switch
-	const patchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}`, token, response: null, data: { timestamp: new Date(newTime).toISOString() }, type: PkRequestType.Patch, id: "", purpose: 'FrontSync' }
-	await addPendingRequest(patchRequest);
-}
-
-export const replacePkSwitchMember = async (switchPkId: string, token: string, options: syncOptions, uid: string, oldMemberDoc: any, newMemberDoc: any, needToSyncNewMember: boolean) => {
-	// Get pk system data required for replacing the member of a pk switch
-	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
-	const systemResult = await addPendingRequest(getSystemRequest)
-
-	if (systemResult?.status !== 200)
-	{
-		return;
-	}
-
-	let newMemberDocFinal = newMemberDoc;
-
-	// Sync new member of the switch to pk if needed
-	if (needToSyncNewMember) {
-		await syncMemberToPk(options, newMemberDoc._id, token, uid, undefined, systemResult?.data.id);
-
-		newMemberDocFinal = await getCollection("members").findOne({ uid, _id: parseId(newMemberDoc._id) });
-	}
-	
-	// Get current switch data from pk
-	const getSwitchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
-	const switchResult = await addPendingRequest(getSwitchRequest)
-
-	if (switchResult?.status !== 200)
-	{
-		return;
-	}
-
-	const currentSwitchData = switchResult.data;
-	const currentSwitchMembers = currentSwitchData.members;
-
-	const newSwitchMembersArray = currentSwitchMembers.map((switchMember: any) => switchMember === oldMemberDoc.pkId ? newMemberDocFinal.pkId : oldMemberDoc.pkId);
-
-	// Replace the old member with the new member in the pk switch
-	const patchRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}/members`, token, response: null, data: newSwitchMembersArray, type: PkRequestType.Patch, id: "", purpose: 'FrontSync' }
-	await addPendingRequest(patchRequest);
-}
-
-export const deletePkSwitch = async (switchPkId: string, token: string) => {
-	// Get pk system data required for deleting a switch
-	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
-	const systemResult = await addPendingRequest(getSystemRequest)
-
-	if (systemResult?.status !== 200)
-	{
-		return;
-	}
-
-	// Delete the switch within pk
-	const deleteRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches/${switchPkId}`, token, response: null, data: undefined, type: PkRequestType.Delete, id: "", purpose: 'FrontSync' }
-	await addPendingRequest(deleteRequest);
-}
-
-export const syncCurrentFrontersWithPk = async (uid: string, fronterSPMemberIds: string[], fronters: any[] | undefined, frontDateTime: string, token: string, options: syncOptions, insertedFrontingDocId: string) => {
-	// Get member documents for current fronters
-	let spFrontersResult = await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds.map((memberId) => parseId(memberId)) }}).toArray();
-
-	dispatchCustomEvent({uid, type: "syncToUpdate", data: "Starting Sync"})
-
-	// Get pk system data and members to determine if we need to sync any current fronters to pk before inserting the switch
-	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
-	const systemResult = await addPendingRequest(getSystemRequest)
-
-	if (systemResult?.status !== 200)
-	{
-		return;
-	}
-
-	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'FrontSync' }
-	const pkMembersResult = await addPendingRequest(getRequest)
-
-	const pkMembers: any[] = pkMembersResult?.data ?? []
-	if (!Array.isArray(pkMembers))
-	{
-		Sentry.captureMessage(`ErrorCode(${ERR_FUNCTIONALITY_EXPECTED_ARRAY})`, scope => {
-			scope.setExtra("payload", pkMembersResult?.data)
-			return scope;
-		});
-		return;
-	}
-
-	// Get any sp members not already synced with pk
-	const spMembersToSync = spFrontersResult.filter((member) => !pkMembers.map((pkMember) => pkMember.id).includes(member.pkId));
-
-	if (spMembersToSync.length) {
-		let lastUpdate = 0
-
-		for (let i = 0; i < spMembersToSync.length; ++i) {
-			const member = spMembersToSync[i];
-
-			const currentCount = i + 1;
-
-			if (moment.now() > lastUpdate + 1000)
-			{
-				dispatchCustomEvent({uid, type: "syncToUpdate", data: `Syncing ${member.name}, ${currentCount.toString()} out of ${spMembersToSync.length.toString()}`})
-				lastUpdate = moment.now()
-			}
-
-			// Sync sp member to pk
-			const result = await syncMemberToPk(options, member._id, token, uid, undefined, systemResult?.data.id);
-			console.log(result)
-		}
-
-		// Get new member docs with any added pk ids
-		spFrontersResult = await getCollection("members").find({ uid, _id: { "$in": fronterSPMemberIds.map((memberId) => parseId(memberId)) }}).toArray();
-	}
-
-	// Get current fronter entries to sort the fronters sent to pk
-	const frontersData = fronters ?? await getCollection("frontHistory").find({ uid: uid, live: true }).toArray();
-
-	// Get sorted list of current fronter entries based on front startTime
-	const fronterPKIds = spFrontersResult.sort((spFronterA, spFronterB) => {
-		const fronterEntryA = frontersData.find((fronterEntry) => spFronterA._id === fronterEntry.member) ?? 999999;
-		const fronterEntryB = frontersData.find((fronterEntry) => spFronterB._id === fronterEntry.member) ?? 999999;
-
-		return fronterEntryA.startTime - fronterEntryB.startTime;
-	}).map((spFronter) => spFronter.pkId);
-
-	// Insert the switch with pk
-	const switchData = {
-		timestamp: frontDateTime,
-		members: fronterPKIds
-	};
-
-	const postRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/${systemResult?.data.id}/switches`, token, response: null, data: switchData, type: PkRequestType.Post, id: "", purpose: 'FrontSync' }
-	const postResult = await addPendingRequest(postRequest);
-
-	if (postResult?.status !== 200)
-	{
-		return;
-	}
-
-	// Update the applicable front history entry with the associated pk id
-	await getCollection("frontHistory").updateOne({ _id: parseId(insertedFrontingDocId) }, { $set: { pkId: postResult.data.id }});
-}
-
 export const syncAllSpMembersToPk = async (options: syncOptions, _allSyncOptions: syncAllOptions, token: string, userId: string): Promise<{ success: boolean, msg: string }> => {
 	const spMembersResult = await getCollection("members").find({ uid: userId }).toArray()
 
 	dispatchCustomEvent({uid: userId, type: "syncToUpdate", data: "Starting Sync"})
 
-	const getSystemRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
-	const systemResult = await addPendingRequest(getSystemRequest)
+	const pkAPI = new PkAPI(token, 'Member');
 
-	if (systemResult?.status !== 200)
-	{
-		return handlePkResponse(systemResult!);
+	try {
+		await pkAPI.setSystemId();
+	} catch (e) {
+		return handlePkAPIError(e);
 	}
 
-	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
-	const pkMembersResult = await addPendingRequest(getRequest)
+	let foundMembers: PkMember[] = [];
 
-	const foundMembers: any[] = pkMembersResult?.data ?? []
-	if (!Array.isArray(foundMembers))
-	{
-		Sentry.captureMessage(`ErrorCode(${ERR_FUNCTIONALITY_EXPECTED_ARRAY})`, scope => {
-			scope.setExtra("payload", pkMembersResult?.data)
-			return scope;
-		});
-		return { success: true, msg: `Something went wrong, please try again later. ErrorCode(${ERR_FUNCTIONALITY_EXPECTED_ARRAY})` }
+	try {
+		foundMembers = await pkAPI.getMembers();
+	} catch (e) {
+		return handlePkAPIError(e);
 	}
 
-	let lastUpdate = 0
+	let lastUpdate = 0;
 
 	for (let i = 0; i < spMembersResult.length; ++i) {
 		const member = spMembersResult[i];
@@ -446,62 +291,56 @@ export const syncAllSpMembersToPk = async (options: syncOptions, _allSyncOptions
 		
 		const foundMember : any | undefined = foundMembers.find((value) => value.id === member.pkId)
 
-		const result = await syncMemberToPk(options, member._id, token, userId, foundMember, systemResult?.data.id);
+		const result = await syncMemberToPk(options, member._id, token, userId, foundMember, pkAPI.systemId || undefined);
 		console.log(result)
 	}
 	return { success: true, msg: "Sync completed" }
 }
 
 export const syncAllPkMembersToSp = async (options: syncOptions, allSyncOptions: syncAllOptions, token: string, userId: string): Promise<{ success: boolean, msg: string }> => {
-	dispatchCustomEvent({uid: userId, type: "syncFromUpdate", data: "Starting Sync"})
+	dispatchCustomEvent({uid: userId, type: "syncFromUpdate", data: "Starting Sync"});
 
-	const getRequest: PkRequest = { path: `https://api.pluralkit.me/v2/systems/@me/members`, token, response: null, data: undefined, type: PkRequestType.Get, id: "", purpose: 'Member' }
-	const pkMembersResult = await addPendingRequest(getRequest)
+	const pkAPI = new PkAPI(token, 'Member');
 
-	let lastUpdate = 0
+	let foundMembers: PkMember[] = [];
 
-	if (pkMembersResult) {
-		if (pkMembersResult.status === 200) {
+	try {
+		foundMembers = await pkAPI.getMembers();
+	} catch (e) {
+		return handlePkAPIError(e);
+	}
+	
+	let lastUpdate = 0;
 
-			const foundMembers: any[] = pkMembersResult.data
-			const promises: Promise<{ success: boolean, msg: string }>[] = [];
+	const promises: Promise<{ success: boolean, msg: string }>[] = [];
 
-			const bulkWrites: AnyBulkWriteOperation<any>[] = []
+	const bulkWrites: AnyBulkWriteOperation<any>[] = []
 
-			for (let i = 0; i < foundMembers.length; ++i) {
-				const member = foundMembers[i];
-				const currentCount = i + 1;
+	for (let i = 0; i < foundMembers.length; ++i) {
+		const member = foundMembers[i];
+		const currentCount = i + 1;
 
-				if (moment.now() > lastUpdate + 1000)
-				{
-					dispatchCustomEvent({uid: userId, type: "syncFromUpdate", data: `Syncing ${member.name}, ${currentCount.toString()} out of ${foundMembers.length.toString()}`})
-					lastUpdate = moment.now()
-				}               
-
-				const spMemberResult = await getCollection("members").findOne({ uid: userId, pkId: parseId(member.id) })
-				if (spMemberResult && allSyncOptions.overwrite) {
-					promises.push(syncMemberFromPk(options, member.id, token, userId, foundMembers[i], bulkWrites, allSyncOptions.privateByDefault));
-				}
-
-				if (!spMemberResult && allSyncOptions.add) {
-					promises.push(syncMemberFromPk(options, member.id, token, userId, foundMembers[i], bulkWrites, allSyncOptions.privateByDefault));
-				}
-			}
-
-			await Promise.all(promises);
-
-			if (bulkWrites && bulkWrites.length > 0) {
-				getCollection("members").bulkWrite(bulkWrites);
-			}
-
-			return { success: true, msg: "" }
-		}
-		else 
+		if (moment.now() > lastUpdate + 1000)
 		{
-			return handlePkResponse(pkMembersResult);
+			dispatchCustomEvent({uid: userId, type: "syncFromUpdate", data: `Syncing ${member.name}, ${currentCount.toString()} out of ${foundMembers.length.toString()}`})
+			lastUpdate = moment.now()
+		}               
+
+		const spMemberResult = await getCollection("members").findOne({ uid: userId, pkId: parseId(member.id) })
+		if (spMemberResult && allSyncOptions.overwrite) {
+			promises.push(syncMemberFromPk(options, member.id, token, userId, foundMembers[i], bulkWrites, allSyncOptions.privateByDefault));
+		}
+
+		if (!spMemberResult && allSyncOptions.add) {
+			promises.push(syncMemberFromPk(options, member.id, token, userId, foundMembers[i], bulkWrites, allSyncOptions.privateByDefault));
 		}
 	}
-	else {
-		return { success: false, msg: `Unable to reach PluralKit's servers` }
+
+	await Promise.all(promises);
+
+	if (bulkWrites && bulkWrites.length > 0) {
+		getCollection("members").bulkWrite(bulkWrites);
 	}
+
+	return { success: true, msg: "" }
 }

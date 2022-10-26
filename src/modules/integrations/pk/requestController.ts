@@ -1,10 +1,9 @@
 import axios, { AxiosError, AxiosResponse } from "axios";
 import { logger } from "../../logger";
 import * as Sentry from "@sentry/node";
-import { nanoid } from "nanoid";
 import { getCollection } from "../../mongo";
-
 import promclient from "prom-client"
+import { ObjectId } from "mongodb";
 
 export enum PkRequestType {
 	Get,
@@ -14,22 +13,22 @@ export enum PkRequestType {
 }
 
 export interface PkRequest {
+	_id?: ObjectId,
 	path: string,
 	token: string,
 	data: any | undefined,
 	type: PkRequestType,
 	purpose: 'Member' | 'FrontSync',
 	response: AxiosResponse<any> | null,
-	id: string,
 }
 
 export interface QueuedRequest {
-	id: string,
+	_id: ObjectId,
 	request: PkRequest,
 	purpose: 'Member' | 'FrontSync',
 }
 
-let pendingRequestIds: string[] = [];
+let pendingRequestIds: ObjectId[] = [];
 let pendingResponses: Array<PkRequest> = [];
 
 const memberRateLimit = parseInt(process.env.MEMBERPLURALKITRATELIMIT ?? '2');
@@ -44,18 +43,18 @@ const frontSyncPluralKitAppHeader = process.env.FRONTSYNCPLURALKITAPP ?? '';
 export const addPendingRequest = (request: PkRequest): Promise<AxiosResponse<any> | null> => {
 	return new Promise(function (resolve) {
 
-		request.id = nanoid()
+		request._id = new ObjectId();
 
 		// Add as pending request
 		const queuedRequests = getCollection(`pk${request.purpose}QueuedRequests`);
-		queuedRequests.insertOne({ id: request.id, request: request, purpose: request.purpose });
+		queuedRequests.insertOne({ _id: request._id, request: request, purpose: request.purpose });
 
 		// Wait until request was answered
 		(function waitForAnswer() {
-			const response = pendingResponses.find((response) => response.id === request.id)
+			const response = pendingResponses.find((response) => response._id === request._id)
 
 			if (response) {
-				pendingResponses = pendingResponses.filter(response => response.id != request.id)
+				pendingResponses = pendingResponses.filter(response => response._id != request._id)
 				return resolve(response.response)
 			}
 
@@ -64,7 +63,7 @@ export const addPendingRequest = (request: PkRequest): Promise<AxiosResponse<any
 	});
 }
 
-export const startPkController = () => {
+export const startPkRequestController = () => {
 	reportActiveQueueSize();
 	tick()
 	resetRequestCounter();
@@ -105,12 +104,12 @@ export const tick = async () => {
 
 		if (memberRemainingRequestsThisSecond > 0) {
 			// Limit queued requests we're grabbing to ones not currently in the pendingRequestIds array - and - limit to the rate limit value for member requests
-			const queuedRequestsToDispatch: QueuedRequest[] = await queuedMemberRequests.find({ id: { "$nin": pendingRequestIds }}, { limit: memberRateLimit }).toArray();
+			const queuedRequestsToDispatch: QueuedRequest[] = await queuedMemberRequests.find({ _id: { "$nin": pendingRequestIds }}, { limit: memberRateLimit }).toArray();
 
 			queuedRequestsToDispatch.forEach((queuedRequest) => {
 				dispatchTickRequests(queuedRequest.request);
 				// If we keep track of pending request IDs in-memory, we don't need to keep track of or filter based on a "started" property
-				pendingRequestIds.push(queuedRequest.id);
+				pendingRequestIds.push(queuedRequest._id);
 				memberRemainingRequestsThisSecond--;
 			});
 		}
@@ -127,12 +126,12 @@ export const tick = async () => {
 
 		if (frontSyncRemainingRequestsThisSecond > 0) {
 			// Limit queued requests we're grabbing to ones not currently in the pendingRequestIds array - and - limit to the rate limit value for front sync requests
-			const queuedRequestsToDispatch: QueuedRequest[] = await queuedFrontSyncRequests.find({ id: { "$nin": pendingRequestIds }}, { limit: frontSyncRateLimit }).toArray();
+			const queuedRequestsToDispatch: QueuedRequest[] = await queuedFrontSyncRequests.find({ _id: { "$nin": pendingRequestIds }}, { limit: frontSyncRateLimit }).toArray();
 
 			queuedRequestsToDispatch.forEach((queuedRequest) => {
 				dispatchTickRequests(queuedRequest.request);
 				// If we keep track of pending request IDs in-memory, we don't need to keep track of or filter based on a "request started" property
-				pendingRequestIds.push(queuedRequest.id);
+				pendingRequestIds.push(queuedRequest._id);
 				frontSyncRemainingRequestsThisSecond--;
 			});
 		}
@@ -152,7 +151,7 @@ export const removeQueuedRequest = async (request: PkRequest) => {
 	
 	// Remove the queued request document from mongo
 	const queuedRequests = getCollection(`pk${request.purpose}QueuedRequests`);
-	await queuedRequests.deleteOne({ id: request.id });
+	await queuedRequests.deleteOne({ _id: request._id });
 }
 
 const memberCounter  = new promclient.Counter({

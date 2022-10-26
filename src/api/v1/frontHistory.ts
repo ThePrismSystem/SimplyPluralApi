@@ -65,12 +65,19 @@ export const add = async (req: Request, res: Response) => {
 		req.body.startTime = req.body.endTime - 1;
 	}
 
+	const token = req.body.token;
+	const options = req.body.options;
+
+	// Remove pk token and sync options so they aren't saved to mongo
+	delete(req.body.token);
+	delete(req.body.options);
+
 	const addFrontHistory = await addSimpleDocument(req, res, "frontHistory");
 
 	frontChange(res.locals.uid, false, req.body.member, true)
 
-	if (req.body.token && req.body.options) {
-		frontChangeToPk(res.locals.uid, req.body.token, req.body.options, addFrontHistory.insertedId);
+	if (token && options) {
+		frontChangeToPk(res.locals.uid, token, options, req.body.live, addFrontHistory.insertedId);
 	}
 }
 
@@ -109,6 +116,13 @@ export const update = async (req: Request, res: Response) => {
 		{
 			req.body.endTime = Math.min(moment.now(), Number(req.body.endTime))
 		}
+		
+		const token = req.body.token;
+		const options = req.body.options;
+	
+		// Remove pk token and sync options so they aren't saved to mongo
+		delete(req.body.token);
+		delete(req.body.options);
 
 		await updateSimpleDocument(req, res, "frontHistory")
 
@@ -119,9 +133,9 @@ export const update = async (req: Request, res: Response) => {
 			frontChange(res.locals.uid, false, req.body.member ?? frontingDoc.member, true)
 		}
 
-		// Sync front change to pk if the existing front has an associated pk switch id OR if the front entry is now live and it wasn't before
-		if (req.body.token && req.body.options && (frontingDoc.pkId || (frontingDoc.live === true && req.body.live === false))) {
-			frontChangeToPk(res.locals.uid, req.body.token, req.body.options, frontingDoc._id, frontingDoc, true);
+		// Sync front history change to pk
+		if (token && options) {
+			frontChangeToPk(res.locals.uid, token, options, req.body.live, frontingDoc._id, frontingDoc, true);
 		}
 	}
 	else {
@@ -139,15 +153,22 @@ export const del = async (req: Request, res: Response) => {
 	if (frontingDoc) {
 		if (frontingDoc.live === true) {
 			frontChange(res.locals.uid, true, frontingDoc.member, true)
-
-			// Sync front change to pk if the existing front has an associated pk switch id OR if the front entry being deleted was live
-			if (req.body.token && req.body.options && (frontingDoc.pkId || frontingDoc.live === true)) {
-				frontChangeToPk(res.locals.uid, req.body.token, req.body.options, frontingDoc._id, frontingDoc, false, true);
-			}
 		}
 	}
+	
+	const token = req.body.token;
+	const options = req.body.options;
+
+	// Remove pk token and sync options so they aren't saved to mongo
+	delete(req.body.token);
+	delete(req.body.options);
 
 	deleteSimpleDocument(req, res, "frontHistory");
+
+	// Sync front history change to pk
+	if (token && options) {
+		frontChangeToPk(res.locals.uid, token, options, req.body.live, frontingDoc._id, frontingDoc, false, true);
+	}
 }
 
 export const validatefrontHistoryPostSchema = (body: any): { success: boolean, msg: string } => {
