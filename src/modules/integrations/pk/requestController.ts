@@ -51,10 +51,10 @@ export const addPendingRequest = (request: PkRequest): Promise<AxiosResponse<any
 
 		// Wait until request was answered
 		(function waitForAnswer() {
-			const response = pendingResponses.find((response) => response._id === request._id)
+			const response = pendingResponses.find((response) => response._id?.toString() === request._id?.toString())
 
 			if (response) {
-				pendingResponses = pendingResponses.filter(response => response._id != request._id)
+				pendingResponses = pendingResponses.filter(response => response._id?.toString() != request._id?.toString())
 				return resolve(response.response)
 			}
 
