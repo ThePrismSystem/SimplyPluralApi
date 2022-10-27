@@ -18,7 +18,8 @@ export interface SPFrontHistoryEntry {
     _id: ObjectId,
     custom: boolean,
     live: boolean,
-    startTime: number | null,
+    startTime: number,
+    endTime: number | null,
     member: string,
     uid: string,
     lastOperationTime: number
