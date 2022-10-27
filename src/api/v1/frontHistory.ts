@@ -167,7 +167,7 @@ export const del = async (req: Request, res: Response) => {
 
 	// Sync front history change to pk
 	if (token && options) {
-		frontChangeToPk(res.locals.uid, token, options, req.body.live, frontingDoc._id, frontingDoc, false, true);
+		frontChangeToPk(res.locals.uid, token, options, frontingDoc.live, frontingDoc._id, frontingDoc, false, true);
 	}
 }
 

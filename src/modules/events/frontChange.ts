@@ -4,12 +4,14 @@ import { getCollection, parseId } from "../mongo";
 import { notifyOfFrontChange } from "./automatedReminder";
 import { performEvent } from "./eventController";
 import { syncDeletedSwitchToPk, syncMembersNotInPk, syncNewSwitchToPk, syncOptions, syncUpdatedSwitchToPk } from "../integrations/pk/sync";
-import { addPendingSync, getAllQueuedSyncsForUser, PkQueuedSync, PkSyncType, SPFrontHistoryEntry } from "../integrations/pk/syncController";
+import { addPendingSync, getAllQueuedSyncsForUser, PkQueuedSync, PkSyncType, removeAllQueuedSyncsForUser, SPFrontHistoryEntry } from "../integrations/pk/syncController";
 import { ObjectId } from "mongodb";
 
 export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
 	// Get all applicable front sync events for the user
 	const userPkQueuedSyncs = await getAllQueuedSyncsForUser(uid);
+
+	console.log('userPkQueuedSyncs', userPkQueuedSyncs);
 
 	const frontingDocs: any = {};
 
@@ -20,24 +22,32 @@ export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
 		frontingDocs[sync.sync.data.frontingDocId] = frontingDoc;
 	}
 
+	console.log('frontingDocs', frontingDocs);
+
 	// Sync any members within these syncs to pk if they don't already exist in pk
 	let memberIds: string[] = [];
 
 	userPkQueuedSyncs.forEach((sync) => {
 		const syncFrontingDoc = frontingDocs[sync.sync.data.frontingDocId];
 
-		memberIds.push(syncFrontingDoc.member);
+		if (syncFrontingDoc !== null) {
+			memberIds.push(syncFrontingDoc.member);
+		}
 	});
 
 	// De-dupe member ids
 	memberIds = [...new Set(memberIds)];
 
-	const spMembers = await getCollection('members').find({ uid, _id: { '$in': memberIds.map((memberId) => parseId(memberId)) }}).toArray();
-	const token = userPkQueuedSyncs[0].sync.token;
-	const options = userPkQueuedSyncs[0].sync.syncOptions;
+	console.log('memberIds', memberIds);
 
-	// Perform the sync of new members
-	await syncMembersNotInPk(options, token, uid, spMembers);
+	if (memberIds.length) {
+		const spMembers = await getCollection('members').find({ uid, _id: { '$in': memberIds.map((memberId) => parseId(memberId)) }}).toArray();
+		const token = userPkQueuedSyncs[0].sync.token;
+		const options = userPkQueuedSyncs[0].sync.syncOptions;
+	
+		// Perform the sync of new members
+		await syncMembersNotInPk(options, token, uid, spMembers);
+	}
 
 	// Scenarios to handle
 	// 	- Adding a user directly to front - DONE
@@ -47,6 +57,8 @@ export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
 	//  - Changing a past front history entry - DONE
 	//  - Deleting a past front history entry - DONE
 
+	console.log('HANDLE INSERT SYNCS');
+
 	/* --- HANDLE INSERT SYNCS --- */
 	const insertSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Insert);
 
@@ -54,21 +66,27 @@ export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
 	const batchedInsertSyncs: PkQueuedSync[][] = insertSyncs.reduce((accum, sync) => {
 		const syncFrontingDoc = frontingDocs[sync.sync.data.frontingDocId];
 
-		accum.forEach((arrayOfSyncs) => {
-			arrayOfSyncs.forEach((accumSync) => {
-				const frontingDoc = frontingDocs[accumSync.sync.data.frontingDocId];
-
-				if ((syncFrontingDoc.live && frontingDoc.live && syncFrontingDoc.startTime === frontingDoc.startTime) ||
-					(!syncFrontingDoc.live && !frontingDoc.live && syncFrontingDoc.startTime === frontingDoc.startTime && syncFrontingDoc.endTime === frontingDoc.endTime)) {
-					arrayOfSyncs.push(sync);
-				} else {
-					accum.push([sync])
-				}
-			}
-			)});
+		if (!accum.length) {
+			accum.push([sync]);
+		} else {
+			accum.forEach((arrayOfSyncs) => {
+				arrayOfSyncs.forEach((accumSync) => {
+					const frontingDoc = frontingDocs[accumSync.sync.data.frontingDocId];
+	
+					if ((syncFrontingDoc.live && frontingDoc.live && syncFrontingDoc.startTime === frontingDoc.startTime) ||
+						(!syncFrontingDoc.live && !frontingDoc.live && syncFrontingDoc.startTime === frontingDoc.startTime && syncFrontingDoc.endTime === frontingDoc.endTime)) {
+						arrayOfSyncs.push(sync);
+					} else {
+						accum.push([sync])
+					}
+				})
+			});
+		}
 
 		return accum;
 	}, [] as PkQueuedSync[][]);
+
+	console.log('batchedInsertSyncs', batchedInsertSyncs);
 
 	// Insert new switches for each set of batched insert syncs
 	await Promise.all(batchedInsertSyncs.map((syncArray) => {
@@ -84,6 +102,8 @@ export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
 		return syncNewSwitchToPk(token, uid, frontingDocIds, live, frontStartTime, frontEndTime);
 	}));
 
+	console.log('HANDLE UPDATE SYNCS');
+
 	/* --- HANDLE UPDATE SYNCS --- */
 	const updateSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Update);
 
@@ -92,13 +112,17 @@ export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
 		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 		syncUpdatedSwitchToPk(sync.sync.token, uid, sync.sync.data.frontingDocId, sync.sync.data.live, sync.sync.data.oldFrontingDoc!)));
 
+	console.log('HANDLE DELETE SYNCS');
+
 	/* --- HANDLE DELETE SYNCS --- */
-	const deleteSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Update);
+	const deleteSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Delete);
 
 	// Delete switches
 	await Promise.all(deleteSyncs.map((sync) =>
 		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 		syncDeletedSwitchToPk(sync.sync.token, uid, sync.sync.data.live, sync.sync.data.oldFrontingDoc!)));
+
+	await removeAllQueuedSyncsForUser(uid);
 }
 
 export const frontChangeToPk = async (uid: string, token: string, syncOptions: syncOptions, live: boolean, frontingDocId: string, oldFrontingDoc?: SPFrontHistoryEntry, frontingDocChanged = false, frontingDocRemoved = false) => {

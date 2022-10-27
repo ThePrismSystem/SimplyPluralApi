@@ -35,6 +35,7 @@ export class PkAPI {
 
     private performPkRequest = async (path: string, type: PkRequestType, data?: any): Promise<any | never> => {
     	try {
+    		console.log('performPkRequest', path, type, data);
     		const result = await addPendingRequest({
     			path,
     			token: this.token,
@@ -43,6 +44,8 @@ export class PkAPI {
     			type,
     			purpose: this.purpose,
     		});
+
+    		console.log('result', result);
 
     		if (result?.status === 200) {
     			return result.data;
@@ -83,7 +86,7 @@ export class PkAPI {
 	public getSwitches = async (before: number, limit: number): Promise<PkSwitch[]> => {
 		await this.setSystemId();
 
-		return this.performPkRequest(`${this.apiBaseUrl}/systems/${this.systemId}/switches?before=${before}&limit=${limit}`, PkRequestType.Get);
+		return this.performPkRequest(`${this.apiBaseUrl}/systems/${this.systemId}/switches?before=${new Date(before).toISOString()}&limit=${limit}`, PkRequestType.Get);
 	}
 
 	// Get a single switch at an exact timestamp (if it exists)
@@ -99,11 +102,21 @@ export class PkAPI {
 	public getSwitchesBetweenTwoTimestamps = async (startTime: number, endTime: number): Promise<PkSwitch[]> => {
 		const getSingleSwitchClosestToStartTime = await this.getSwitches(startTime + 1, 1);
 
+		console.log('getSingleSwitchClosestToStartTime', getSingleSwitchClosestToStartTime);
+
 		const endTimePlusThreeHours = endTime + (60 * 60 * 3 * 1000);
+
+		console.log('endTimePlusThreeHours', endTimePlusThreeHours);
 
 		const endTimeSwitches = await this.recursivelyGrabSwitches([], startTime, false, endTimePlusThreeHours);
 
-		return this.getUniqueSwitchesWithBookEnds(getSingleSwitchClosestToStartTime.concat(endTimeSwitches), startTime, endTime);
+		console.log('endTimeSwitches', endTimeSwitches);
+
+		const uniqueSwitchesWithBookEnds = this.getUniqueSwitchesWithBookEnds(getSingleSwitchClosestToStartTime.concat(endTimeSwitches), startTime, endTime);
+
+		console.log('uniqueSwitchesWithBookEnds', uniqueSwitchesWithBookEnds);
+
+		return uniqueSwitchesWithBookEnds;
 	}
 
 	// Utility function to recursively grab switches using pk's pagination on their switches endpoint. **IMPORTANT** - this function assumes there will never be
@@ -125,19 +138,25 @@ export class PkAPI {
 	}
 
 	// Utility function to get an array of unique switches with 1 switch that is either at the exact start/end time or the first one past it
-	private getUniqueSwitchesWithBookEnds = (arrayOfSwitches: PkSwitch[], startTime: number, endTime: number): PkSwitch[] => {
+	private getUniqueSwitchesWithBookEnds = (arrayOfSwitches: PkSwitch[], startTime: number, endTime?: number): PkSwitch[] => {
 		const uniqueSwitches: PkSwitch[] = [];
 
 		const firstSwitch = this.getClosestSwitchToTimestamp(arrayOfSwitches, startTime, true);
-		const lastSwitch = this.getClosestSwitchToTimestamp(arrayOfSwitches, endTime, false);
+		console.log('firstSwitch', firstSwitch);
+		const lastSwitch = endTime ? this.getClosestSwitchToTimestamp(arrayOfSwitches, endTime, false) : null;
+		console.log('lastSwitch', lastSwitch);
 
 		arrayOfSwitches.forEach((switchObj) => {
 			const existingSwitch = uniqueSwitches.find((uniqueSwitch) => uniqueSwitch.id === switchObj.id);
+			console.log('existingSwitch', existingSwitch);
 
-			if (!existingSwitch && (new Date(switchObj.timestamp).getTime() <= new Date(lastSwitch.timestamp).getTime() && new Date(switchObj.timestamp).getTime() >= new Date(firstSwitch.timestamp).getTime())) {
+			const endTimestamp = lastSwitch ? new Date(lastSwitch.timestamp).getTime() : +new Date();
+
+			if (!existingSwitch && (new Date(switchObj.timestamp).getTime() <= endTimestamp && new Date(switchObj.timestamp).getTime() >= new Date(firstSwitch.timestamp).getTime())) {
 				uniqueSwitches.push(switchObj);
 			}
 		});
+		console.log('uniqueSwitches', uniqueSwitches);
 
 		return uniqueSwitches;
 	}
@@ -217,22 +236,27 @@ export class PkAPI {
 
 	public addMemberToMultipleSwitches = async (memberPkId: string, pkSwitches: PkSwitch[]): Promise<void> => {
 		for (const pkSwitch of pkSwitches) {
-			// Combine and de-duplicate the old members list with the new one
-			const newMembersArray = [...new Set(pkSwitch.members.concat([memberPkId]))];
+			if (!pkSwitch.members.includes(memberPkId)) {
+				// Combine and de-duplicate the old members list with the new one
+				const newMembersArray = [...new Set(pkSwitch.members.concat([memberPkId]))];
 
-			await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+				await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+			}
 		}
 	}
 
 	public addMembersToMultipleSwitches = async (memberPkIds: string[], pkSwitches: PkSwitch[]): Promise<void> => {
 		for (const pkSwitch of pkSwitches) {
-			// Combine and de-duplicate the old members list with the new one
-			const newMembersArray = [...new Set([...pkSwitch.members, ...memberPkIds])];
+			if (!memberPkIds.every((memberPkId) => pkSwitch.members.includes(memberPkId))) {
+				// Combine and de-duplicate the old members list with the new one
+				const newMembersArray = [...new Set([...pkSwitch.members, ...memberPkIds])];
 
-			await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+				await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+			}
 		}
 	}
 
+	// TODO - handle previous switch and current switch having same members list
 	public removeMemberFromMultipleSwitches = async (memberPkId: string, pkSwitches: PkSwitch[]): Promise<void> => {
 		for (const pkSwitch of pkSwitches) {
 			// Only update the switch if the member is currently in it
@@ -244,6 +268,7 @@ export class PkAPI {
 		}
 	}
 
+	// TODO - handle previous switch and current switch having same members list
 	public replaceMemberInMultipleSwitches = async (oldMemberPkId: string, newMemberPkId: string, pkSwitches: PkSwitch[]): Promise<void> => {
 		for (const pkSwitch of pkSwitches) {
 			// Only update the switch if the old member is currently in it

@@ -388,6 +388,8 @@ export const syncNewSwitchToPk = async (token: string, uid: string, frontingDocI
 	// Check if a switch already exists at the exact start time of this new switch
 	const switchAtExactStartTime = await pkAPI.getSwitchAtExactTimestamp(frontStartTime);
 
+	console.log('switchAtExactStartTime', switchAtExactStartTime);
+
 	if (switchAtExactStartTime !== null) {
 		// A switch exists already at the start time, so change members of the existing switch
 
@@ -396,16 +398,29 @@ export const syncNewSwitchToPk = async (token: string, uid: string, frontingDocI
 
 		await pkAPI.updateSwitchMembers(switchAtExactStartTime.id, newMembersArray);
 	} else {
-		// No switch exists at the start time, so create a new one
-		await pkAPI.insertSwitch(frontStartTime, frontHistoryMemberPkIds);
+		// No switch exists at the start time, so grab existing fronters, and create a new switch
+		const lastSwitchBeforeThisOneArray = await pkAPI.getSwitches(frontStartTime, 1);
+
+		if (lastSwitchBeforeThisOneArray.length) {
+			const lastSwitchBeforeThisOne = lastSwitchBeforeThisOneArray[0];
+
+			// Combine and de-duplicate the old members list with the new one
+			const newMembersArray = [...new Set([...lastSwitchBeforeThisOne.members, ...frontHistoryMemberPkIds])];
+
+			await pkAPI.insertSwitch(frontStartTime, newMembersArray);
+		} else {
+			await pkAPI.insertSwitch(frontStartTime, frontHistoryMemberPkIds);
+		}
 	}
+
+	console.log('live', live);
 
 	if (live) {
 		// Get all switches between the front start time and now
-		const applicableSwitches = await pkAPI.getSwitchesBetweenTwoTimestamps(frontStartTime, +new Date());
+		const switchesToAddMembersTo = await pkAPI.getSwitchesBetweenTwoTimestamps(frontStartTime, +new Date());
 
 		// Add member(s) to the found switches
-		await pkAPI.addMembersToMultipleSwitches(frontHistoryMembers.map((member) => member.pkId), applicableSwitches);
+		await pkAPI.addMembersToMultipleSwitches(frontHistoryMembers.map((member) => member.pkId), switchesToAddMembersTo);
 	} else {
 		if (frontEndTime) {
 			// Get the switch (if it exists) at the exact front end time
@@ -467,8 +482,19 @@ export const syncUpdatedSwitchToPk = async (token: string, uid: string, fronting
 
 				await pkAPI.updateSwitchMembers(switchAtExactStartTime.id, newMembersArray);
 			} else {
-				// No switch exists at the start time, so create a new one
-				await pkAPI.insertSwitch(newFrontHistoryDoc.startTime, newFrontHistoryMember.pkId);
+				// No switch exists at the start time, so grab existing fronters, and create a new switch
+				const lastSwitchBeforeThisOneArray = await pkAPI.getSwitches(newFrontHistoryDoc.startTime, 1);
+
+				if (lastSwitchBeforeThisOneArray.length) {
+					const lastSwitchBeforeThisOne = lastSwitchBeforeThisOneArray[0];
+
+					// Combine and de-duplicate the old members list with the added one
+					const newMembersArray = [...new Set(...lastSwitchBeforeThisOne.members.concat(newFrontHistoryMember.pkId))];
+
+					await pkAPI.insertSwitch(newFrontHistoryDoc.startTime, newMembersArray);
+				} else {
+					await pkAPI.insertSwitch(newFrontHistoryDoc.startTime, newFrontHistoryMember.pkId);
+				}
 			}
 
 			// Get switches that the member should be added to and add them to those switches
@@ -510,8 +536,19 @@ export const syncUpdatedSwitchToPk = async (token: string, uid: string, fronting
 
 					await pkAPI.updateSwitchMembers(switchAtExactStartTime.id, newMembersArray);
 				} else {
-				// No switch exists at the start time, so create a new one
-					await pkAPI.insertSwitch(newFrontHistoryDoc.startTime, newFrontHistoryMember.pkId);
+					// No switch exists at the start time, so grab existing fronters, and create a new switch
+					const lastSwitchBeforeThisOneArray = await pkAPI.getSwitches(newFrontHistoryDoc.startTime, 1);
+
+					if (lastSwitchBeforeThisOneArray.length) {
+						const lastSwitchBeforeThisOne = lastSwitchBeforeThisOneArray[0];
+
+						// Combine and de-duplicate the old members list with the added one
+						const newMembersArray = [...new Set(...lastSwitchBeforeThisOne.members.concat(newFrontHistoryMember.pkId))];
+
+						await pkAPI.insertSwitch(newFrontHistoryDoc.startTime, newMembersArray);
+					} else {
+						await pkAPI.insertSwitch(newFrontHistoryDoc.startTime, newFrontHistoryMember.pkId);
+					}
 				}
 
 				// Get the switch (if it exists) at the exact front end time
@@ -547,16 +584,20 @@ export const syncDeletedSwitchToPk = async (token: string, uid: string, live: bo
 	// Get old fronting doc member
 	const oldFrontingDocMember: any = await getCollection('members').findOne({ uid, _id: parseId(oldFrontHistoryDoc.member)});
 
+	console.log('oldFrontingDocMember', oldFrontingDocMember);
+
 	const pkAPI = new PkAPI(token, 'FrontSync');
 
 	if (live) {
 		// Get switches that the member should be removed from and remove from those switches
 		const switchesToRemoveMemberFrom = await pkAPI.getSwitchesBetweenTwoTimestamps(oldFrontHistoryDoc.startTime, +new Date());
+		console.log('switchesToRemoveMemberFrom', switchesToRemoveMemberFrom);
 		await pkAPI.removeMemberFromMultipleSwitches(oldFrontingDocMember.pkId, switchesToRemoveMemberFrom);
 	} else {
 		// Get switches that the member should be removed from and remove from those switches
 		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 		const switchesToRemoveMemberFrom = await pkAPI.getSwitchesBetweenTwoTimestamps(oldFrontHistoryDoc.startTime, oldFrontHistoryDoc.endTime!);
+		console.log('switchesToRemoveMemberFrom', switchesToRemoveMemberFrom);
 		await pkAPI.removeMemberFromMultipleSwitches(oldFrontingDocMember.pkId, switchesToRemoveMemberFrom);
 	}
 }
