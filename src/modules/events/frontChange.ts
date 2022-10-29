@@ -4,127 +4,165 @@ import { getCollection, parseId } from "../mongo";
 import { notifyOfFrontChange } from "./automatedReminder";
 import { performEvent } from "./eventController";
 import { syncDeletedSwitchToPk, syncMembersNotInPk, syncNewSwitchToPk, syncOptions, syncUpdatedSwitchToPk } from "../integrations/pk/sync";
-import { addPendingSync, getAllQueuedSyncsForUser, PkQueuedSync, PkSyncType, removeMultipleQueuedSyncs, removeQueuedSync, SPFrontHistoryEntry } from "../integrations/pk/syncController";
+import { addPendingSync, changeMultipleSyncsStatus, changeSyncStatus, getAllQueuedSyncsForUser, PkQueuedSync, PkSyncType, removeMultipleQueuedSyncs, removeQueuedSync, SPFrontHistoryEntry } from "../integrations/pk/syncController";
 import { ObjectId } from "mongodb";
 
 export const initiateFrontSyncToPk = async (uid: string, _event: any) => {
 	// Get all applicable front sync events for the user
 	const userPkQueuedSyncs = await getAllQueuedSyncsForUser(uid);
 
-	console.log('userPkQueuedSyncs', userPkQueuedSyncs);
+	// Use a try...catch to ensure any issues with a pk front sync don't crash the server + to ensure status of the syncs is changed back to not started on an error
+	try {
+		await changeMultipleSyncsStatus(userPkQueuedSyncs, true);
 
-	// Sync any members within these syncs to pk if they don't already exist in pk
-	let memberIds: string[] = [];
+		console.log('userPkQueuedSyncs', userPkQueuedSyncs);
 
-	userPkQueuedSyncs.forEach((sync) => {
-		const syncFrontingDoc = sync.sync.data.newFrontingDoc || sync.sync.data.oldFrontingDoc;
+		// Sync any members within these syncs to pk if they don't already exist in pk
+		let memberIds: string[] = [];
 
-		if (syncFrontingDoc !== null) {
-			memberIds.push(syncFrontingDoc.member);
+		userPkQueuedSyncs.forEach((sync) => {
+			const syncFrontingDoc = sync.sync.data.newFrontingDoc || sync.sync.data.oldFrontingDoc;
+
+			if (syncFrontingDoc !== null) {
+				memberIds.push(syncFrontingDoc.member);
+			}
+		});
+
+		// De-dupe member ids
+		memberIds = [...new Set(memberIds)];
+
+		console.log('memberIds', memberIds);
+
+		if (memberIds.length) {
+			const spMembers = await getCollection('members').find({ uid, _id: { '$in': memberIds.map((memberId) => parseId(memberId)) }}).toArray();
+			const token = userPkQueuedSyncs[0].sync.token;
+			const options = userPkQueuedSyncs[0].sync.syncOptions;
+	
+			// Perform the sync of new members
+			await syncMembersNotInPk(options, token, uid, spMembers);
 		}
-	});
 
-	// De-dupe member ids
-	memberIds = [...new Set(memberIds)];
+		// Scenarios to handle
+		// 	- Adding a user directly to front - DONE
+		//  - Adding a front to front history - DONE
+		//  - Changing a fronting member's front start time - DONE
+		//  - Removing a user from front - DONE
+		//  - Changing a past front history entry - DONE
+		//  - Deleting a past front history entry - DONE
 
-	console.log('memberIds', memberIds);
+		console.log('HANDLE INSERT SYNCS');
 
-	if (memberIds.length) {
-		const spMembers = await getCollection('members').find({ uid, _id: { '$in': memberIds.map((memberId) => parseId(memberId)) }}).toArray();
-		const token = userPkQueuedSyncs[0].sync.token;
-		const options = userPkQueuedSyncs[0].sync.syncOptions;
+		/* --- HANDLE INSERT SYNCS --- */
+		const insertSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Insert);
+
+		// Loop through insert syncs and combine switches with the same start time and end time
+		const batchedInsertSyncs: PkQueuedSync[][] = insertSyncs.reduce((accum, sync) => {
+			const syncFrontingDoc = sync.sync.data.newFrontingDoc;
+
+			if (!accum.length) {
+				accum.push([sync]);
+			} else {
+				accum.forEach((arrayOfSyncs) => {
+					arrayOfSyncs.forEach((accumSync) => {
+						const frontingDoc = accumSync.sync.data.newFrontingDoc;
 	
-		// Perform the sync of new members
-		await syncMembersNotInPk(options, token, uid, spMembers);
-	}
-
-	// Scenarios to handle
-	// 	- Adding a user directly to front - DONE
-	//  - Adding a front to front history - DONE
-	//  - Changing a fronting member's front start time - DONE
-	//  - Removing a user from front - DONE
-	//  - Changing a past front history entry - DONE
-	//  - Deleting a past front history entry - DONE
-
-	console.log('HANDLE INSERT SYNCS');
-
-	/* --- HANDLE INSERT SYNCS --- */
-	const insertSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Insert);
-
-	// Loop through insert syncs and combine switches with the same start time and end time
-	const batchedInsertSyncs: PkQueuedSync[][] = insertSyncs.reduce((accum, sync) => {
-		const syncFrontingDoc = sync.sync.data.newFrontingDoc;
-
-		if (!accum.length) {
-			accum.push([sync]);
-		} else {
-			accum.forEach((arrayOfSyncs) => {
-				arrayOfSyncs.forEach((accumSync) => {
-					const frontingDoc = accumSync.sync.data.newFrontingDoc;
-	
-					if (syncFrontingDoc &&
+						if (syncFrontingDoc &&
 						frontingDoc &&
 						((syncFrontingDoc.live && frontingDoc.live && syncFrontingDoc.startTime === frontingDoc.startTime) ||
 						(!syncFrontingDoc.live && !frontingDoc.live && syncFrontingDoc.startTime === frontingDoc.startTime && syncFrontingDoc.endTime === frontingDoc.endTime))) {
-						arrayOfSyncs.push(sync);
-					} else {
-						accum.push([sync])
-					}
-				})
-			});
-		}
+							arrayOfSyncs.push(sync);
+						} else {
+							accum.push([sync])
+						}
+					})
+				});
+			}
 
-		return accum;
-	}, [] as PkQueuedSync[][]);
+			return accum;
+		}, [] as PkQueuedSync[][]);
 
-	console.log('batchedInsertSyncs', batchedInsertSyncs);
+		console.log('batchedInsertSyncs', batchedInsertSyncs);
 
-	// Insert new switches for each set of batched insert syncs
-	await Promise.all(batchedInsertSyncs.map(async (syncArray) => {
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		const frontingDocs = syncArray.map((sync) => sync.sync.data.newFrontingDoc!);
+		// Insert new switches for each set of batched insert syncs
+		await Promise.all(batchedInsertSyncs.map(async (syncArray) => {
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			const frontingDocs = syncArray.map((sync) => sync.sync.data.newFrontingDoc!);
 
-		const firstFrontingDoc = syncArray[0].sync.data.newFrontingDoc || syncArray[0].sync.data.oldFrontingDoc;
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		const live = firstFrontingDoc!.live;
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		const frontStartTime = firstFrontingDoc!.startTime;
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		const frontEndTime = live ? undefined : firstFrontingDoc!.endTime;
+			const firstFrontingDoc = syncArray[0].sync.data.newFrontingDoc || syncArray[0].sync.data.oldFrontingDoc;
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			const live = firstFrontingDoc!.live;
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			const frontStartTime = firstFrontingDoc!.startTime;
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			const frontEndTime = live ? undefined : firstFrontingDoc!.endTime;
 
-		const token = syncArray[0].sync.token;
+			const token = syncArray[0].sync.token;
 
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		await syncNewSwitchToPk(token, uid, frontingDocs, live ?? false, frontStartTime, frontEndTime!);
+			// If any issues with the sync(s), re-queue them for later
+			try {
+				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+				await syncNewSwitchToPk(token, uid, frontingDocs, live ?? false, frontStartTime, frontEndTime!);
 
-		return removeMultipleQueuedSyncs(uid, syncArray.map((sync) => sync.sync));
-	}));
+				return removeMultipleQueuedSyncs(uid, syncArray.map((sync) => sync.sync));
+			} catch (e) {
+				logger.error(e);
 
-	console.log('HANDLE UPDATE SYNCS');
+				await changeMultipleSyncsStatus(syncArray, false);
 
-	/* --- HANDLE UPDATE SYNCS --- */
-	const updateSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Update);
+				performEvent('frontSyncToPk', uid, 60 * 30 * 1000);
+			}
+		}));
 
-	// Update switches
-	await Promise.all(updateSyncs.map(async (sync) => {
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		await syncUpdatedSwitchToPk(sync.sync.token, uid, sync.sync.data.live, sync.sync.data.oldFrontingDoc!, sync.sync.data.newFrontingDoc!);
+		console.log('HANDLE UPDATE SYNCS');
 
-		return removeQueuedSync(sync.sync);
-	}));
+		/* --- HANDLE UPDATE SYNCS --- */
+		const updateSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Update);
 
-	console.log('HANDLE DELETE SYNCS');
+		// Update switches
+		await Promise.all(updateSyncs.map(async (sync) => {
+			// If any issues with the sync(s), re-queue them for later
+			try {
+				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+				await syncUpdatedSwitchToPk(sync.sync.token, uid, sync.sync.data.live, sync.sync.data.oldFrontingDoc!, sync.sync.data.newFrontingDoc!);
 
-	/* --- HANDLE DELETE SYNCS --- */
-	const deleteSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Delete);
+				return removeQueuedSync(sync.sync);
+			} catch (e) {
+				logger.error(e);
 
-	// Delete switches
-	await Promise.all(deleteSyncs.map(async (sync) => {
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		syncDeletedSwitchToPk(sync.sync.token, uid, sync.sync.data.live, sync.sync.data.oldFrontingDoc!);
+				await changeSyncStatus(sync, false);
 
-		return removeQueuedSync(sync.sync);
-	}));
+				performEvent('frontSyncToPk', uid, 60 * 30 * 1000);
+			}
+		}));
+
+		console.log('HANDLE DELETE SYNCS');
+
+		/* --- HANDLE DELETE SYNCS --- */
+		const deleteSyncs = userPkQueuedSyncs.filter((queuedSync) => queuedSync.sync.type === PkSyncType.Delete);
+
+		// Delete switches
+		await Promise.all(deleteSyncs.map(async (sync) => {
+			// If any issues with the sync(s), re-queue them for later
+			try {
+				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+				syncDeletedSwitchToPk(sync.sync.token, uid, sync.sync.data.live, sync.sync.data.oldFrontingDoc!);
+
+				return removeQueuedSync(sync.sync);
+			} catch (e) {
+				logger.error(e);
+
+				await changeSyncStatus(sync, false);
+
+				performEvent('frontSyncToPk', uid, 60 * 30 * 1000);
+			}
+		}));
+	} catch (e) {
+		logger.error(e);
+
+		await changeMultipleSyncsStatus(userPkQueuedSyncs, true);
+
+		performEvent('frontSyncToPk', uid, 60 * 30 * 1000);
+	}
 }
 
 export const frontChangeToPk = async (uid: string, token: string, syncOptions: syncOptions, live: boolean, frontingDocId: string, oldFrontingDoc: SPFrontHistoryEntry | null, newFrontingDoc: SPFrontHistoryEntry | null, frontingDocChanged = false, frontingDocRemoved = false) => {

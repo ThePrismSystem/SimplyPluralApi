@@ -39,7 +39,8 @@ export interface PkQueuedSync {
 	_id: string,
     uid: string,
     timestamp: number,
-	sync: PkSync
+	sync: PkSync,
+    started: boolean
 }
 
 export const addPendingSync = async (sync: PkSync) => getCollection(`pkQueuedSyncs`).insertOne({ _id: sync._id, uid: sync.uid, timestamp: Date.now(), sync });
@@ -65,6 +66,10 @@ export const deleteOldQueuedSyncs = async () => {
 
 	setTimeout(deleteOldQueuedSyncs, 10000);
 }
+
+export const changeSyncStatus = async (sync: PkQueuedSync, started: boolean) => getCollection(`pkQueuedSyncs`).updateOne({ _id: sync._id }, { $set: { started } });
+
+export const changeMultipleSyncsStatus = async (syncs: PkQueuedSync[], started: boolean) => getCollection(`pkQueuedSyncs`).updateMany({ _id: syncs.map((sync) => sync._id) }, { $set: { started } });
 
 export const removeQueuedSync = async (sync: PkSync) => getCollection(`pkQueuedSyncs`).deleteOne({ _id: sync._id });
 
