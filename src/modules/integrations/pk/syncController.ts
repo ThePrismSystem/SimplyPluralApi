@@ -77,4 +77,4 @@ export const removeMultipleQueuedSyncs = async (uid: string, syncs: PkSync[]) =>
 
 export const removeAllQueuedSyncsForUser = async (uid: string) => getCollection("pkQueuedSyncs").deleteMany({ uid });
 
-export const getAllQueuedSyncsForUser = async (uid: string): Promise<PkQueuedSync[]> => getCollection("pkQueuedSyncs").find({ uid }).toArray();
+export const getAllQueuedSyncsForUser = async (uid: string): Promise<PkQueuedSync[]> => getCollection("pkQueuedSyncs").find({ uid, started: false }).toArray();

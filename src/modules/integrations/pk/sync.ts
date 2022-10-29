@@ -430,7 +430,7 @@ export const syncNewSwitchToPk = async (token: string, uid: string, frontHistory
 				await pkAPI.updateSwitchMembers(switchAtExactEndTime.id, endTimeSwitchMembers);
 			} else {
 				// Get the switch closest to the front end time (that is less than the end time)
-				const closestSwitchToEndTime = await pkAPI.getSwitches(frontEndTime + 1, 1);
+				const closestSwitchToEndTime = await pkAPI.getSwitches(frontEndTime, 1);
 
 				const endTimeSwitchMembers = closestSwitchToEndTime[0].members.filter((member) => !frontHistoryMemberPkIds.includes(member));
 
