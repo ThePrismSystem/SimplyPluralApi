@@ -1,6 +1,7 @@
 /* eslint-disable no-mixed-spaces-and-tabs */
 import { addPendingRequest, PkRequestType } from "./requestController";
 import { PkInsertMember, PkMember, PkSwitch, PkUpdateMember } from "./types";
+import { Promise as Bluebird } from 'bluebird';
 
 export class PkAPIError extends Error {
 	public status: number;
@@ -47,7 +48,7 @@ export class PkAPI {
 
     		console.log('result', result);
 
-    		if (result?.status === 200) {
+    		if (result?.status === 200 || result?.status === 204) {
     			return result.data;
     		} else if (result) {
     			throw new PkAPIError('There was an error completing the PluralKit request', result.status, result.data);
@@ -235,49 +236,111 @@ export class PkAPI {
 	}
 
 	public addMemberToMultipleSwitches = async (memberPkId: string, pkSwitches: PkSwitch[]): Promise<void> => {
-		for (const pkSwitch of pkSwitches) {
+		Bluebird.map(pkSwitches, async (pkSwitch) => {
 			if (!pkSwitch.members.includes(memberPkId)) {
 				// Combine and de-duplicate the old members list with the new one
 				const newMembersArray = [...new Set(pkSwitch.members.concat([memberPkId]))];
 
 				await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
 			}
-		}
+		});
 	}
 
 	public addMembersToMultipleSwitches = async (memberPkIds: string[], pkSwitches: PkSwitch[]): Promise<void> => {
-		for (const pkSwitch of pkSwitches) {
+		Bluebird.map(pkSwitches, async (pkSwitch) => {
 			if (!memberPkIds.every((memberPkId) => pkSwitch.members.includes(memberPkId))) {
 				// Combine and de-duplicate the old members list with the new one
 				const newMembersArray = [...new Set([...pkSwitch.members, ...memberPkIds])];
 
 				await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
 			}
-		}
+		});
 	}
 
-	// TODO - handle previous switch and current switch having same members list
 	public removeMemberFromMultipleSwitches = async (memberPkId: string, pkSwitches: PkSwitch[]): Promise<void> => {
-		for (const pkSwitch of pkSwitches) {
+		const sortedSwitches = pkSwitches.sort((switchA, switchB) => new Date(switchA.timestamp).getTime() - new Date(switchB.timestamp).getTime());
+
+		// We need to loop through the switches one at a time
+		await Bluebird.each(sortedSwitches, async (pkSwitch) => {
 			// Only update the switch if the member is currently in it
 			if (pkSwitch.members.find((member) => member === memberPkId)) {
 				const newMembersArray = pkSwitch.members.filter((member) => member !== memberPkId);
 
-				await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+				console.log('newMembersArray', newMembersArray);
+
+				const previousSwitch = await this.getPreviousSwitch(pkSwitch);
+
+				console.log('previousSwitch', previousSwitch);
+
+				const sortedPreviousMembers = previousSwitch?.members.sort();
+				const sortedCurrentMembers = newMembersArray.sort();
+
+				console.log('sortedPreviousMembers', sortedPreviousMembers);
+				console.log('sortedCurrentMembers', sortedCurrentMembers);
+
+				console.log(previousSwitch && !sortedSwitches.map((switchObj) => switchObj.id).includes(previousSwitch.id));
+				console.log(sortedPreviousMembers?.length === sortedCurrentMembers.length && sortedPreviousMembers?.every((v, i) => v === sortedCurrentMembers[i]));
+
+				// Check if previous switch and the potential updated switch would have the same members list
+				// If so, delete the current switch instead of updating members
+				if (previousSwitch &&
+					sortedPreviousMembers &&
+					!sortedSwitches.map((switchObj) => switchObj.id).includes(previousSwitch.id) &&
+					(sortedPreviousMembers.length === sortedCurrentMembers.length && sortedPreviousMembers.every((v, i) => v === sortedCurrentMembers[i]))) {
+					await this.deleteSwitch(pkSwitch.id);
+				} else {
+					await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+				}
 			}
-		}
+		});
+
+		console.log('end of removeMemberFromMultipleSwitches function');
 	}
 
-	// TODO - handle previous switch and current switch having same members list
 	public replaceMemberInMultipleSwitches = async (oldMemberPkId: string, newMemberPkId: string, pkSwitches: PkSwitch[]): Promise<void> => {
-		for (const pkSwitch of pkSwitches) {
+		const sortedSwitches = pkSwitches.sort((switchA, switchB) => new Date(switchA.timestamp).getTime() - new Date(switchB.timestamp).getTime());
+
+		// We need to loop through the switches one at a time
+		await Bluebird.each(sortedSwitches, async (pkSwitch) => {
 			// Only update the switch if the old member is currently in it
 			if (pkSwitch.members.find((member) => member === oldMemberPkId)) {
 				const newMembersArray = pkSwitch.members.map((memberPkId) => memberPkId === oldMemberPkId ? newMemberPkId : memberPkId);
+				
+				console.log('newMembersArray', newMembersArray);
 
-				await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+				const previousSwitch = await this.getPreviousSwitch(pkSwitch);
+
+				console.log('previousSwitch', previousSwitch);
+
+				const sortedPreviousMembers = previousSwitch?.members.sort();
+				const sortedCurrentMembers = newMembersArray.sort();
+
+				console.log('sortedPreviousMembers', sortedPreviousMembers);
+				console.log('sortedCurrentMembers', sortedCurrentMembers);
+
+				console.log(previousSwitch && !sortedSwitches.map((switchObj) => switchObj.id).includes(previousSwitch.id));
+				console.log(sortedPreviousMembers?.length === sortedCurrentMembers.length && sortedPreviousMembers?.every((v, i) => v === sortedCurrentMembers[i]));
+
+				// Check if previous switch and the potential updated switch would have the same members list
+				// If so, delete the current switch instead of updating members
+				if (previousSwitch &&
+					sortedPreviousMembers &&
+					!sortedSwitches.map((switchObj) => switchObj.id).includes(previousSwitch.id) &&
+					(sortedPreviousMembers.length === sortedCurrentMembers.length && sortedPreviousMembers.every((v, i) => v === sortedCurrentMembers[i]))) {
+					await this.deleteSwitch(pkSwitch.id);
+				} else {
+					await this.updateSwitchMembers(pkSwitch.id, newMembersArray);
+				}
 			}
-		}
+		});
+
+		console.log('end of replaceMemberInMultipleSwitches function');
+	}
+
+	public getPreviousSwitch = async (pkSwitch: PkSwitch): Promise<PkSwitch | null> => {
+		const previousSwitchArray = await this.getSwitches(new Date(pkSwitch.timestamp).getTime(), 1);
+
+		return previousSwitchArray.length ? previousSwitchArray[0] : null;
 	}
 
 	public replaceSingleSwitchMember = async (switchPkId: string, oldMemberPkId: string, newMemberPkId: string) => {

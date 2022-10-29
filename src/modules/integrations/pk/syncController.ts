@@ -11,7 +11,8 @@ export enum PkSyncType {
 export interface PkSyncData {
     live: boolean,
     frontingDocId: string,
-    oldFrontingDoc?: SPFrontHistoryEntry
+    oldFrontingDoc: SPFrontHistoryEntry | null,
+    newFrontingDoc: SPFrontHistoryEntry | null
 }
 
 export interface SPFrontHistoryEntry {

@@ -77,7 +77,9 @@ export const add = async (req: Request, res: Response) => {
 	frontChange(res.locals.uid, false, req.body.member, true)
 
 	if (token && options) {
-		frontChangeToPk(res.locals.uid, token, options, req.body.live, addFrontHistory.insertedId);
+		const frontingDoc = await getCollection('frontHistory').findOne({ uid: res.locals.uid, _id: parseId(addFrontHistory.insertedId)});
+
+		frontChangeToPk(res.locals.uid, token, options, req.body.live, addFrontHistory.insertedId, null, frontingDoc);
 	}
 }
 
@@ -135,7 +137,9 @@ export const update = async (req: Request, res: Response) => {
 
 		// Sync front history change to pk
 		if (token && options) {
-			frontChangeToPk(res.locals.uid, token, options, req.body.live, frontingDoc._id, frontingDoc, true);
+			const newFrontingDoc = await getCollection('frontHistory').findOne({ uid: res.locals.uid, _id: parseId(req.params.id)});
+
+			frontChangeToPk(res.locals.uid, token, options, req.body.live, frontingDoc._id, frontingDoc, newFrontingDoc, true);
 		}
 	}
 	else {
@@ -167,7 +171,7 @@ export const del = async (req: Request, res: Response) => {
 
 	// Sync front history change to pk
 	if (token && options) {
-		frontChangeToPk(res.locals.uid, token, options, frontingDoc.live, frontingDoc._id, frontingDoc, false, true);
+		frontChangeToPk(res.locals.uid, token, options, frontingDoc.live, frontingDoc._id, frontingDoc, null, false, true);
 	}
 }
 

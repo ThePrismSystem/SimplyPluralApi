@@ -374,10 +374,7 @@ export const syncMembersNotInPk = async (options: syncOptions, token: string, ui
 	}
 }
 
-export const syncNewSwitchToPk = async (token: string, uid: string, frontingDocIds: string[], live: boolean, frontStartTime: number, frontEndTime?: number): Promise<void> => {
-	// Get applicable fronting docs
-	const frontHistoryDocs: SPFrontHistoryEntry[] = await getCollection('frontHistory').find({ uid, _id: { '$in': frontingDocIds.map((docId) => parseId(docId))}}).toArray();
-
+export const syncNewSwitchToPk = async (token: string, uid: string, frontHistoryDocs: SPFrontHistoryEntry[], live: boolean, frontStartTime: number, frontEndTime?: number): Promise<void> => {
 	// Get members for applicable fronting docs
 	const frontHistoryMembers: any[] = await getCollection('members').find({ uid, _id: { '$in': frontHistoryDocs.map((doc) => parseId(doc.member)) }}).toArray();
 
@@ -444,10 +441,7 @@ export const syncNewSwitchToPk = async (token: string, uid: string, frontingDocI
 	}
 }
 
-export const syncUpdatedSwitchToPk = async (token: string, uid: string, frontingDocId: string, live: boolean, oldFrontHistoryDoc: SPFrontHistoryEntry): Promise<void> => {
-	// Get new fronting doc
-	const newFrontHistoryDoc: SPFrontHistoryEntry = await getCollection('frontHistory').findOne({ uid, _id: parseId(frontingDocId)});
-
+export const syncUpdatedSwitchToPk = async (token: string, uid: string, live: boolean, oldFrontHistoryDoc: SPFrontHistoryEntry, newFrontHistoryDoc: SPFrontHistoryEntry): Promise<void> => {
 	// Get new fronting doc member
 	const newFrontHistoryMember: any = await getCollection('members').findOne({ uid, _id: parseId(newFrontHistoryDoc.member)});
 
