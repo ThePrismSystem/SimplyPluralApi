@@ -68,6 +68,8 @@ export const deleteOldQueuedSyncs = async () => {
 
 export const removeQueuedSync = async (sync: PkSync) => getCollection(`pkQueuedSyncs`).deleteOne({ _id: sync._id });
 
+export const removeMultipleQueuedSyncs = async (uid: string, syncs: PkSync[]) => getCollection(`pkQueueSyncs`).deleteMany({ uid, _id: { '$in': syncs.map((sync) => sync._id)}});
+
 export const removeAllQueuedSyncsForUser = async (uid: string) => getCollection("pkQueuedSyncs").deleteMany({ uid });
 
 export const getAllQueuedSyncsForUser = async (uid: string): Promise<PkQueuedSync[]> => getCollection("pkQueuedSyncs").find({ uid }).toArray();

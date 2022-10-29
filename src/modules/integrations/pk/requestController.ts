@@ -80,8 +80,8 @@ export const reportActiveQueueSize = async () => {
 	const memberQueueSize = await getMemberQueueSize();
 	const frontSyncQueueSize = await getFrontSyncQueueSize();
 
-	console.log(`Active pk controller (Member) queue size: ${memberQueueSize.toString()}`);
-	console.log(`Active pk controller (FrontSync) queue size: ${frontSyncQueueSize.toString()}`);
+	console.log(`Active pk request controller (Member) queue size: ${memberQueueSize.toString()}`);
+	console.log(`Active pk request controller (FrontSync) queue size: ${frontSyncQueueSize.toString()}`);
 
 	setTimeout(reportActiveQueueSize, 10000);
 }
